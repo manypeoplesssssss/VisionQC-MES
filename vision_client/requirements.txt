@@ -1,0 +1,5 @@
+# 검사 PC(3D 치수 / PatchCore / YOLO 프로그램 쪽) 에 설치할 패키지   [기능 F08 · 담당 B]
+# 설치: pip install -r requirements.txt
+requests>=2.31   # MES 서버로 이미지 + 결과 전송 (필수)
+numpy>=1.24      # anomaly_map_to_box() 쓸 때만 필요 (PatchCore 환경엔 보통 이미 있음)
+pytest>=8.0      # test_mes_client.py 실행용 (검사 PC 에서는 없어도 됨)

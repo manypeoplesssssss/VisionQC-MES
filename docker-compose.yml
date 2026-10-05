@@ -1,0 +1,49 @@
+# 한 번에 실행:  docker compose up -d --build
+# 화면: http://localhost   (API 문서: http://localhost:8000/docs)
+# 더미 데이터:  docker compose exec backend python seed.py --demo
+#
+# 컨테이너 3개: mysql(DB) → backend(FastAPI) → frontend(nginx + React)
+# 데이터는 볼륨(mysql_data, images)에 저장돼서 컨테이너를 지웠다 켜도 남는다.
+# 전부 지우려면: docker compose down -v   (주의: DB와 이미지 삭제)
+services:
+  # ---------- DB ----------
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      MYSQL_DATABASE: visionqc_mes
+      MYSQL_USER: mes_user
+      MYSQL_PASSWORD: mes_pass
+      TZ: Asia/Seoul
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    ports: ["3306:3306"]
+    volumes: [mysql_data:/var/lib/mysql]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-umes_user", "-pmes_pass"]
+      interval: 5s
+      retries: 20
+
+  # ---------- API 서버 ----------
+  backend:
+    build: ./backend
+    environment:
+      DATABASE_URL: mysql+pymysql://mes_user:mes_pass@mysql:3306/visionqc_mes?charset=utf8mb4
+      STORAGE_DIR: /data/images
+      JWT_SECRET: change-this-secret
+      INGEST_API_KEY: change-this-ingest-key
+      CORS_ORIGINS: http://localhost,http://localhost:5173
+      TZ: Asia/Seoul
+    ports: ["8000:8000"]
+    volumes: [images:/data/images]
+    depends_on:
+      mysql: { condition: service_healthy }  # MySQL 이 완전히 뜬 뒤에 시작
+
+  # ---------- 화면 ----------
+  frontend:
+    build: ./frontend
+    ports: ["80:80"]
+    depends_on: [backend]
+
+volumes:
+  mysql_data:
+  images:

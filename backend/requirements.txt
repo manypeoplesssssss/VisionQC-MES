@@ -1,0 +1,13 @@
+# 백엔드 실행에 필요한 패키지 (설치: pip install -r requirements.txt)
+# 각 패키지 설명은 docs/PACKAGES.md
+fastapi>=0.115
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+pymysql>=1.1
+cryptography>=42        # MySQL 8 caching_sha2_password 인증용
+pydantic>=2.7
+pydantic-settings>=2.3
+pyjwt>=2.8
+bcrypt>=4.1
+python-multipart>=0.0.9 # 이미지 업로드(multipart/form-data)
+pillow>=10.0            # seed.py 더미 이미지 생성용
