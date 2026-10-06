@@ -11,10 +11,10 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api, fmtTime, isAdmin } from "../api/client.js";
+import { ALARM_TYPE_LABEL, api, fmtTime, isAdmin, STAGE_NAME } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 import ImageViewer from "../components/ImageViewer.jsx";
-import { FinalBadge, StageBadge, YoloBadge } from "../components/ResultBadge.jsx";
+import { AlarmBadge, FinalBadge, SafetyBadge, StageBadge, YoloBadge } from "../components/ResultBadge.jsx";
 
 const AXES = [
   ["width", "가로"],
@@ -85,6 +85,11 @@ export default function InspectionDetail() {
           <dt>단계</dt>
           <dd className="row-gap">
             3D 치수 <StageBadge value={insp.dimension_result} /> → PatchCore <StageBadge value={insp.patchcore_result} /> → YOLO <YoloBadge value={insp.yolo_status} />
+          </dd>
+          <dt>장비 상태</dt>
+          <dd className="row-gap">
+            센터링 <SafetyBadge kind="centering" value={insp.centering_state} /> 인터락 <SafetyBadge kind="interlock" value={insp.interlock_state} />
+            <span className="muted small">(마지막 확인 값. 센터링 OFF + 인터락 0 일 때만 검사 허용)</span>
           </dd>
         </dl>
       </section>
@@ -197,6 +202,32 @@ export default function InspectionDetail() {
           <p className="muted small">YOLO 검출만으로는 D01~D05 공정 불량이 자동 분류되지 않습니다. 위치·공정을 확인해 불량 코드를 지정하세요.</p>
         )}
       </section>
+
+      {insp.alarms.length > 0 && (
+        <section className="card">
+          <h3>안전 알람 <span className="muted small">{insp.active_alarms}건 발생 중</span></h3>
+          <table className="table">
+            <thead>
+              <tr><th>발생 시각</th><th>종류</th><th>상태</th><th>센터링</th><th>인터락</th><th>검사 단계</th><th>내용</th><th>해제 시각</th></tr>
+            </thead>
+            <tbody>
+              {insp.alarms.map((a) => (
+                <tr key={a.id}>
+                  <td className="mono small">{fmtTime(a.occurred_at)}</td>
+                  <td>{ALARM_TYPE_LABEL[a.alarm_type] ?? a.alarm_type}</td>
+                  <td><AlarmBadge value={a.alarm_status} /></td>
+                  <td><SafetyBadge kind="centering" value={a.centering_state} /></td>
+                  <td><SafetyBadge kind="interlock" value={a.interlock_state} /></td>
+                  <td>{STAGE_NAME[a.inspection_stage] ?? a.inspection_stage}</td>
+                  <td className="small">{a.alarm_message || "-"}</td>
+                  <td className="mono small muted">{fmtTime(a.cleared_at) || "-"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="muted small">해제는 [안전 알람] 화면에서 합니다. 해제해도 검사는 자동으로 다시 시작되지 않습니다.</p>
+        </section>
+      )}
 
       <section className="card">
         <h3>원인 후보 · 권장 조치</h3>

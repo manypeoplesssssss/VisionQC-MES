@@ -58,7 +58,7 @@ VisionQC-MES/
 │  │  ├─ main.py                    앱 시작점. 라우터 등록, CORS, 테이블 자동 생성, /api/health
 │  │  ├─ config.py                  .env 설정 읽기 (settings 객체). 제품별 기준 치수 PRODUCT_STANDARDS
 │  │  ├─ database.py                DB 연결, 세션(get_db)
-│  │  ├─ models.py                  테이블 4개 정의 + 자동 계산 SQL (ProductInspection, ProductDimensionInspection, DefectType, AdminUser)
+│  │  ├─ models.py                  테이블 5개 정의 + 자동 계산 SQL (EquipmentSafetyAlarm 추가, ProductInspection, ProductDimensionInspection, DefectType, AdminUser)
 │  │  ├─ schemas.py                 API 요청/응답 형식 (Pydantic)
 │  │  ├─ security.py                비밀번호 해시, JWT, 권한 체크(get_current_user, require_admin, require_super_admin, require_ingest_auth)
 │  │  ├─ storage.py                 사진 저장, 파일명 규칙, 서명된 사진 주소
@@ -72,7 +72,7 @@ VisionQC-MES/
 │  │     ├─ dashboard.py            /api/dashboard/*   대시보드 집계
 │  │     └─ images.py               /api/images/*      사진 파일 (서명 확인)
 │  ├─ tests/                        pytest (SQLite 로 실행): test_auth · test_users · test_ingest · test_inspections · test_dashboard
-│  ├─ sql/schema.sql                MySQL DB·계정·테이블 4개·불량 종류 초기 데이터
+│  ├─ sql/schema.sql                MySQL DB·계정·테이블 5개·불량 종류 초기 데이터
 │  ├─ seed.py                       기본 계정·불량 종류·더미 데이터
 │  ├─ requirements.txt / requirements-dev.txt
 │  ├─ .env.example                  설정 예시 (복사해서 .env)
@@ -125,6 +125,7 @@ VisionQC-MES/
 
 ```mermaid
 erDiagram
+    product_inspection ||--o{ equipment_safety_alarm : "inspection_id (외래키, 시작 전 알람은 NULL)"
     product_inspection ||--o| product_dimension_inspection : "inspection_id (외래키, 1 : 0..1)"
     product_inspection }o..o{ defect_type : "yolo_defect_data 안의 defect_code (논리 참조)"
 
@@ -176,6 +177,18 @@ erDiagram
         json cause_candidates "원인 후보 배열"
         text recommended_action
         bool is_active
+    }
+    equipment_safety_alarm {
+        int id PK
+        varchar inspection_id FK "NULL 가능"
+        varchar alarm_type "CENTERING/INTERLOCK"
+        varchar alarm_status "ACTIVE/CLEARED"
+        varchar centering_state "알람 시점"
+        varchar interlock_state "알람 시점"
+        varchar inspection_stage "PRECHECK/DIMENSION/PATCHCORE/YOLO"
+        text alarm_message
+        datetime occurred_at
+        datetime cleared_at
     }
     admin_user {
         int id PK
@@ -239,6 +252,7 @@ storage/images/2026-10-06/2026-10-06-redcar-143005-YOLO-20261006_inspection_1430
 | 불량 · 대기 묶음 | 불량 = `DIMENSION_DEFECT` + `YOLO_PENDING` + `PROCESS_DEFECT`, 대기 = `DIMENSION_PENDING` + `PATCHCORE_PENDING` |
 | 불량률 | 불량 ÷ (정상 + 불량) × 100. 대기는 제외 |
 | 날짜 귀속 | 검사 시작 시각(`created_at`) 기준 |
+| 장비 안전 | 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 검사 테이블 2개의 `centering_state`(OFF/ON/UNKNOWN), `interlock_state`(0/1/UNKNOWN)에 마지막 확인 값 기록. 이상이면 조건마다 알람 1행 (같은 검사·단계·상태의 발생 중 알람이 있으면 중복 안 만듦). 코드: `services/safety.py` |
 | 권장 조치 | 결함에 지정된 불량 코드들의 `[코드 이름] 원인 후보: … / 권장 조치: …` 를 모아 `recommended_action` 에 저장 |
 
 PatchCore 가 불합격이면 YOLO 가 불량 유형을 분류하지 못하더라도 정상으로 바꾸지 않습니다 (`YOLO_PENDING` / `PROCESS_DEFECT`).
@@ -348,7 +362,17 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
 
 **GET /api/dashboard/daily?date_from=&date_to=** → `[{ "label": "2026-09-23", "total": 30, "defect": 3 }, ...]` (기본 14일)
 
-### 5-6. 계정 (최고관리자)
+### 5-6. 장비 안전 (센터링 · 인터락)
+
+| Method | URL | 권한 | 내용 |
+|---|---|---|---|
+| POST | `/api/safety/check` | 검사 PC(API Key) 또는 로그인 | `{ inspection_id?, product_name?, stage, centering_state, interlock_state, message? }` → `{ allowed, alarms[] }`. 이상이면 알람 기록 |
+| GET | `/api/safety/alarms` | 로그인 | `status`(ACTIVE/CLEARED), `alarm_type`, `inspection_id`, `date_from`, `date_to`, `page`, `size` |
+| POST | `/api/safety/alarms/{id}/clear` | 관리자 이상 또는 검사 PC | 해제 확인 기록 (검사를 다시 시작하지는 않음) |
+
+`PUT /api/inspections/{id}/dimension` 에 `centering_state`, `interlock_state` 를 같이 보내면 치수 행에도 기록되고, 이상이면 알람이 남는다.
+
+### 5-7. 계정 (최고관리자)
 
 | Method | URL | 본문 |
 |---|---|---|
@@ -356,7 +380,7 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
 | POST | `/api/users` | `{ username, password, name, email?, role, receive_defect_reports }` |
 | PATCH | `/api/users/{id}` | `{ name?, email?, role?, is_active?, receive_defect_reports?, password? }` (보낸 것만 변경, 이메일 빈 문자열 = 삭제) |
 
-### 5-7. 기타
+### 5-8. 기타
 - **GET /api/images/{경로}?exp=&sig=** — 사진 파일. 주소는 조회 API 응답의 `*_url` 을 그대로 사용
 - **GET /api/health** — `{ "status": "ok", "db": "ok" }`
 

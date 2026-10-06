@@ -27,11 +27,12 @@ from sqlalchemy.orm import Session
 from ..config import settings
 from ..database import get_db
 from ..models import (DIM_RECHECK_MM, DIM_TOLERANCE_MM, ProductDimensionInspection, ProductInspection,
-                      StageResult, YoloStatus)
+                      InspectionStage, StageResult, YoloStatus)
 from ..schemas import (ID_PATTERN, NAME_PATTERN, DimensionIn, InspectionDetailOut, InspectionUpsert,
                        PatchCoreIn, YoloCaptureIn, YoloCompleteIn)
 from ..security import require_ingest_auth
 from ..services.query import to_detail
+from ..services.safety import record_safety
 from ..storage import delete_image, read_image, save_bytes
 
 log = logging.getLogger("mes.ingest")
@@ -98,7 +99,11 @@ def put_dimension(body: DimensionIn, inspection_id: str = InspectionId,
     dim.standard_length_mm = body.standard_length_mm or std[1]
     dim.standard_height_mm = body.standard_height_mm or std[2]
     dim.scan_file_path = body.scan_file_path
+    dim.centering_state, dim.interlock_state = body.centering_state, body.interlock_state  # 측정 시점 장비 상태
     insp.dimension = dim
+    # 장비 상태를 검사 행에도 기록하고, 이상(ON / 1 / 미확인)이면 알람 기록
+    record_safety(db, insp, InspectionStage.DIMENSION, body.centering_state, body.interlock_state,
+                  "치수 측정 시점 상태")
     db.flush()
     db.refresh(dim)  # DB 가 계산한 축별·종합 합불 읽기
 

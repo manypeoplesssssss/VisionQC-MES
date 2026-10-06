@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, SessionLocal, engine
-from .routers import auth, dashboard, defect_types, images, ingest, inspections, users
+from .routers import auth, dashboard, defect_types, images, ingest, inspections, safety, users
 
 # 콘솔에 "시각 레벨 이름: 메시지" 형식으로 로그 출력
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -44,8 +44,8 @@ app.add_middleware(
 
 # 기능별 API 묶음 등록 (각 파일의 router 객체)
 #   auth 로그인 · users 관리자 계정 · ingest 검사 PC 결과 등록 · inspections 조회·불량 코드·삭제
-#   defect_types 불량 종류 · dashboard 대시보드 · images 사진 파일
-for r in (auth, users, ingest, inspections, defect_types, dashboard, images):
+#   defect_types 불량 종류 · safety 센터링·인터락 알람 · dashboard 대시보드 · images 사진 파일
+for r in (auth, users, ingest, inspections, defect_types, safety, dashboard, images):
     app.include_router(r.router)
 
 

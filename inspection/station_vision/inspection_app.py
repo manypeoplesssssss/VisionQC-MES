@@ -40,7 +40,7 @@ sys.path.insert(0, str(ROOT.parent / "common"))
 
 import config  # noqa: E402
 import yolo_live as live  # noqa: E402
-from mes_client import MESClient, MESError  # noqa: E402
+from mes_client import MESClient, MESError, safety_ok  # noqa: E402
 
 MES_URL = getattr(config, "MES_URL", "http://127.0.0.1:8000")
 MES_API_KEY = getattr(config, "MES_API_KEY", "change-this-ingest-key")
@@ -48,6 +48,9 @@ MES_PRODUCT = getattr(config, "MES_PRODUCT", "redcar")   # 제품 모델명 (MES
 VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
 # 3D 검사(bridge_3d/send_3d_to_mes.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
 HANDOFF = ROOT.parent / "handoff" / "latest.json"
+# 장비 안전 상태 표시 이름. 검사 허용: 센터링 OFF(정위치) + 인터락 0(정상)
+CENTERING_KO = {"OFF": "정위치", "ON": "위치 이상", "UNKNOWN": "미확인"}
+INTERLOCK_KO = {"0": "정상", "1": "비정상", "UNKNOWN": "미확인"}
 
 
 # ---------------------------------------------------------------- 3D → 비전 검사번호 이어받기
@@ -157,9 +160,12 @@ class Sender(threading.Thread):
                     self.client_key = (url, api_key)
                 res = getattr(self.client, action)(**kwargs)
                 what = {"start": "검사 시작", "send_yolo_capture": f"결함 사진 {kwargs.get('capture_number')}",
-                        "complete_yolo": "YOLO 완료"}[action]
+                        "complete_yolo": "YOLO 완료", "check_safety": "안전 상태"}[action]
                 if res is None:
                     self.events.put(("log", f"MES 연결 실패 → 대기열에 저장 ({self.client.pending()}건 대기)"))
+                elif action == "check_safety":
+                    n = len(res.get("alarms", []))
+                    self.events.put(("log", "MES 안전 상태 기록: " + ("정상" if res.get("allowed") else f"이상 → 알람 {n}건 기록")))
                 else:
                     self.events.put(("log", f"MES 전송 완료: {what} → {res.get('final_result')}"))
                 self.events.put(("pending", self.client.pending()))
@@ -173,12 +179,15 @@ class Sender(threading.Thread):
 class Engine(threading.Thread):
     """카메라·턴테이블·YOLO 를 다루는 스레드. 화면(Tk)은 건드리지 않고 events 큐로만 알린다.
     흐름은 yolo_live.main() 과 같다: 시작 → 연속 회전 → 0.80 이상 결함 → 정지·재검출·저장 → 재회전"""
-    def __init__(self, sim, events, sender, mes_settings):
+    def __init__(self, sim, events, sender, mes_settings, safety=lambda: ("UNKNOWN", "UNKNOWN")):
         super().__init__(daemon=True)
         self.sim = sim
         self.events = events
         self.sender = sender
         self.mes_settings = mes_settings  # 화면 입력값을 읽어 오는 함수
+        # 장비 안전 상태 (센터링, 인터락) 를 돌려주는 함수. 센서가 없어서 지금은 화면에서 작업자가 고른 값.
+        # 센서를 붙이면 이 함수만 센서 값을 읽도록 바꾸면 된다 (응답이 끊기면 "UNKNOWN" 을 돌려줄 것)
+        self.safety = safety
         self.commands = queue.Queue()
         self.frame_lock = threading.Lock()
         self.view = None        # 화면에 보여 줄 그림
@@ -256,6 +265,14 @@ class Engine(threading.Thread):
         self._state(status="완료", verdict=verdict)
         self._submit("complete_yolo")
 
+    def _submit_safety(self, stage, centering, interlock, inspection_id=None, message=None):
+        """장비 안전 상태를 MES 에 기록 (이상이면 MES 가 알람 저장). 검사 전이라 job 이 없어도 보낸다"""
+        settings = self.mes_settings()
+        if not settings["enabled"]:
+            return
+        self.sender.submit(settings["url"], settings["api_key"], "check_safety", stage=stage,
+                           centering=centering, interlock=interlock, inspection_id=inspection_id, message=message)
+
     def _submit(self, action, **kwargs):
         job = getattr(self, "job", None)
         if not job or not job["enabled"]:
@@ -311,12 +328,25 @@ class Engine(threading.Thread):
                     continue
                 # 3D 검사에서 넘어온 검사번호가 있으면 이어받는다. 치수 불합격 제품은 비전 검사를 하지 않음
                 handoff = peek_handoff()
+                if handoff and handoff.get("safety_ok") is False:
+                    consume_handoff(handoff)
+                    self._log(f"3D 측정 때 장비 안전 이상({handoff['inspection_id']})이라 이어받지 않습니다. 다시 스캔하세요")
+                    continue
                 if handoff and handoff.get("dimension_result") == "FAIL":
                     consume_handoff(handoff)
                     self._log(f"3D 치수 불합격 제품({handoff['inspection_id']})이라 비전 검사를 하지 않습니다")
                     continue
                 if handoff and handoff.get("dimension_result") == "RECHECK":
                     self._log("주의: 3D 치수가 재검입니다. 다시 스캔하기 전까지 MES 최종 결과는 '치수 대기·재검'")
+                # 장비 안전 사전 확인: 센터링 OFF + 인터락 0 이 아니면 시작하지 않고 MES 에 알람 기록
+                centering, interlock = self.safety()
+                if not safety_ok(centering, interlock):
+                    self._log(f"검사 금지: 센터링 {CENTERING_KO.get(centering, centering)} / "
+                              f"인터락 {INTERLOCK_KO.get(interlock, interlock)} → 상태 확인 후 다시 시작하세요")
+                    self._state(status="시작 불가(안전)")
+                    self._submit_safety("PRECHECK", centering, interlock,
+                                        handoff["inspection_id"] if handoff else None, "검사 시작 전 확인")
+                    continue
                 table.zero()
                 folder = live.new_inspection_folder()
                 captures, last_capture_angle, angle = 0, None, 0.0
@@ -326,13 +356,24 @@ class Engine(threading.Thread):
                 last_frame = time.monotonic()  # 시작 전 정지 영상으로 검출하지 않도록
                 self._log(f"한 바퀴 검사 시작: {folder.name}")
                 self._begin_job(folder, handoff)
+                self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "검사 시작 시 정상")
                 self._state(status="검사 중", angle=0.0, captures=0, verdict="-", folder=folder.name)
                 continue
             if not running:
                 continue
 
-            # ---- 회전 각도 확인
+            # ---- 회전 각도 확인 + 검사 중 장비 안전 확인 (0.5초마다)
             if time.monotonic() - last_poll >= 0.5:
+                centering, interlock = self.safety()
+                if not safety_ok(centering, interlock):
+                    # 이상 감지 → 장비 정지 → 검사 보류 → 알람 저장. 상태가 돌아와도 자동으로 다시 돌지 않음
+                    table.stop()
+                    running = False
+                    self._log(f"안전 이상으로 정지·보류: 센터링 {CENTERING_KO.get(centering, centering)} / "
+                              f"인터락 {INTERLOCK_KO.get(interlock, interlock)} (자동 재시작 안 함)")
+                    self._state(status="보류(안전)", angle=table.position_deg)
+                    self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "검사 중 이상 감지")
+                    continue
                 angle = table.reported_angle()
                 last_poll = time.monotonic()
                 self._state(angle=angle)
@@ -376,7 +417,7 @@ class App:
         self.events = queue.Queue()
         self.sender = Sender(self.events)
         self.sender.start()
-        self.engine = Engine(sim, self.events, self.sender, self.mes_settings)
+        self.engine = Engine(sim, self.events, self.sender, self.mes_settings, self.safety_state)
         self.editing = False     # 검사 영역 지정 중
         self.edit_frame = None
         self.points = []
@@ -384,6 +425,7 @@ class App:
         self.view_scale = 1.0
         self._mes_cache = {}
 
+        self.sim = sim
         root.title("VisionQC 검사" + (" (시뮬레이션)" if sim else ""))
         root.protocol("WM_DELETE_WINDOW", self.quit)
         self._build()
@@ -435,6 +477,27 @@ class App:
             ttk.Label(r, text=label, width=9).pack(side="left")
             ttk.Label(r, textvariable=self.vars[key]).pack(side="left")
 
+        # 장비 안전 상태: 센서가 아직 없어서 작업자가 확인 후 고른다. 미확인이면 검사를 시작할 수 없다.
+        # (검사 중에 이상으로 바꾸면 즉시 정지·보류되고 MES 에 알람이 남는다)
+        safe = ttk.LabelFrame(side, text="장비 안전 상태", padding=8)
+        safe.pack(fill="x", pady=(8, 0))
+        self.safety_vars = {}
+        default = ("OFF", "0") if self.sim else ("UNKNOWN", "UNKNOWN")  # 시뮬레이션은 정상으로 시작
+        for label, key, choices, value in (
+                ("센터링", "centering", [("UNKNOWN", "미확인"), ("OFF", "OFF 정위치"), ("ON", "ON 위치 이상")], default[0]),
+                ("인터락", "interlock", [("UNKNOWN", "미확인"), ("0", "0 정상"), ("1", "1 비정상")], default[1])):
+            r = ttk.Frame(safe)
+            r.pack(fill="x", pady=1)
+            ttk.Label(r, text=label, width=9).pack(side="left")
+            names = [n for _, n in choices]
+            var = tk.StringVar(value=dict(choices)[value])
+            box = ttk.Combobox(r, textvariable=var, values=names, state="readonly", width=16)
+            box.pack(side="left")
+            var.trace_add("write", lambda *_: self._read_safety())
+            self.safety_vars[key] = (var, {n: c for c, n in choices})
+        ttk.Label(safe, text="센터링 OFF + 인터락 0 일 때만 검사", foreground="#6b7686").pack(anchor="w", pady=(4, 0))
+        self._read_safety()
+
         mes = ttk.LabelFrame(side, text="MES 전송", padding=8)
         mes.pack(fill="x", pady=(8, 0))
         self.mes_enabled = tk.BooleanVar(value=True)
@@ -464,6 +527,14 @@ class App:
 
     def mes_settings(self):
         return dict(self._mes_cache)
+
+    # ---- 장비 안전 상태 (화면에서 고른 값 → 검사 스레드에는 복사본)
+    def _read_safety(self):
+        self._safety_cache = tuple(codes[var.get()] for var, codes in
+                                   (self.safety_vars["centering"], self.safety_vars["interlock"]))
+
+    def safety_state(self):
+        return getattr(self, "_safety_cache", ("UNKNOWN", "UNKNOWN"))
 
     def add_log(self, text):
         self.log.insert("end", f"{datetime.now():%H:%M:%S}  {text}")

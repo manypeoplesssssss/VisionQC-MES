@@ -25,6 +25,7 @@ from app.models import (DIM_RECHECK_MM, DIM_TOLERANCE_MM, AdminUser, DefectType,
                         StageResult, YoloStatus)
 from app.security import hash_password
 from app.services.query import refresh_recommended
+from app.services.safety import record_safety
 from app.storage import build_filename
 
 # 공정 불량 5가지 (원인은 확정이 아닌 후보)
@@ -107,6 +108,17 @@ def add_inspection(db, ts, k, now):
     db.add(insp)
     stages_done = (now - ts).total_seconds()  # 오늘 막 들어온 검사는 단계 진행 중
 
+    # 0) 장비 안전 확인: 보통은 센터링 OFF + 인터락 0. 3% 는 치수 측정 중 이상 → 알람 기록 후 검사 보류
+    if random.random() < 0.03:
+        centering, interlock = random.choice([("ON", "0"), ("OFF", "1"), ("ON", "1"), ("UNKNOWN", "UNKNOWN")])
+        _, alarms = record_safety(db, insp, "DIMENSION", centering, interlock, "더미: 측정 중 상태 이상")
+        for a in alarms:
+            a.occurred_at = ts + timedelta(seconds=10)
+            if stages_done > 3600 and random.random() < 0.8:  # 지난 알람은 대부분 해제 확인됨
+                a.alarm_status, a.cleared_at = "CLEARED", ts + timedelta(minutes=random.randint(2, 20))
+        return
+    insp.centering_state, insp.interlock_state = "OFF", "0"
+
     # 1) 3D 치수
     if stages_done < 20:
         return
@@ -119,7 +131,7 @@ def add_inspection(db, ts, k, now):
     insp.dimension = ProductDimensionInspection(
         width_mm=vals[0], length_mm=vals[1], height_mm=vals[2],
         standard_width_mm=std[0], standard_length_mm=std[1], standard_height_mm=std[2],
-        scan_file_path=f"scans/{iid}.ply")
+        scan_file_path=f"scans/{iid}.ply", centering_state="OFF", interlock_state="0")
     db.flush()
     db.refresh(insp.dimension)
     dim = insp.dimension

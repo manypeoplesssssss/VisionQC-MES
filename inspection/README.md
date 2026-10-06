@@ -28,6 +28,8 @@ bridge_3d      검사 시작(start) + 치수(send_dimension) → handoff/ 에 �
 station_vision handoff/ 의 검사번호를 읽어 → PatchCore(send_patchcore) → 불합격이면 YOLO 사진 → 완료
 ```
 최종 결과(정상/치수 불합격/공정 불량 …)는 MES 서버가 자동으로 계산합니다.
+
+**장비 안전:** 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 센서 연결 전이라 버튼 화면의 [장비 안전 상태]에서 작업자가 고릅니다 (기본 미확인 → 시작 불가). 센서를 붙이면 `inspection_app.py` 의 `App.safety_state()` 만 센서 값을 읽게 바꾸면 됩니다.
 3D 쪽 실행 순서와 연결 방법은 [bridge_3d/README.md](bridge_3d/README.md) (station_3d 코드는 그대로 두고 bridge_3d 가 결과만 읽음). PatchCore 는 아직 연결 전이라 지금은 YOLO 결과만 붙습니다.
 
 ## 가상환경 만들기 (폴더마다 따로)

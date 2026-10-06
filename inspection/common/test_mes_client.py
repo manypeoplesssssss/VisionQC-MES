@@ -159,3 +159,23 @@ def test_yolo_to_defects():
 
     assert yolo_to_defects(_Result(), conf_min=0.5) == [
         {"defect_class": "scratch", "confidence": 0.91, "box": [10.0, 20.0, 30.0, 40.0]}]
+
+
+def test_safety_check_and_local_rule(tmp_path):
+    """안전 확인은 /api/safety/check 로, 허용 판단은 이 PC 에서 (센터링 OFF + 인터락 0 만)"""
+    from mes_client import safety_ok
+    assert safety_ok("OFF", "0") and not safety_ok("ON", "0") and not safety_ok("OFF", "UNKNOWN")
+    port = _free_port()
+    srv = _start_server(port)
+    try:
+        mes = MESClient(f"http://127.0.0.1:{port}", api_key=API_KEY, queue_dir=tmp_path / "q", timeout=2)
+        mes.start("I9", "redcar")
+        mes.check_safety("YOLO", "OFF", "1", inspection_id="I9", message="테스트")
+        mes.send_dimension("I9", 194.5, 84.96, 58.68, centering="OFF", interlock="0")
+        method, path, _, body = srv.received[1]
+        assert (method, path) == ("POST", "/api/safety/check")
+        assert body == {"stage": "YOLO", "centering_state": "OFF", "interlock_state": "1", "message": "테스트",
+                        "inspection_id": "I9", "product_name": "redcar"}
+        assert srv.received[2][3]["centering_state"] == "OFF" and srv.received[2][3]["interlock_state"] == "0"
+    finally:
+        srv.shutdown()

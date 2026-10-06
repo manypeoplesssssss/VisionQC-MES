@@ -12,7 +12,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from .models import FinalResult, Role, StageResult, YoloStatus
+from .models import (AlarmStatus, AlarmType, CenteringState, FinalResult, InspectionStage, InterlockState,
+                     Role, StageResult, YoloStatus)
 
 # 파일명·주소에 그대로 들어가는 값은 영문/숫자/_/- 만 허용 → 경로 조작 방지
 NAME_PATTERN = r"^[A-Za-z0-9_]{1,50}$"
@@ -92,6 +93,9 @@ class DimensionIn(BaseModel):
     standard_length_mm: float | None = Field(default=None, gt=0)
     standard_height_mm: float | None = Field(default=None, gt=0)
     scan_file_path: str | None = Field(default=None, max_length=500)
+    # 측정 시점 장비 상태 (검사 프로그램이 같이 기록). 안 보내면 미확인(UNKNOWN)
+    centering_state: CenteringState = CenteringState.UNKNOWN
+    interlock_state: InterlockState = InterlockState.UNKNOWN
 
 
 class PatchCoreIn(BaseModel):
@@ -142,6 +146,8 @@ class DimensionOut(BaseModel):
     height_result: StageResult
     dimension_result: StageResult
     scan_file_path: str | None = None
+    centering_state: CenteringState
+    interlock_state: InterlockState
 
 
 class ImageFileOut(BaseModel):
@@ -176,6 +182,9 @@ class InspectionSummaryOut(BaseModel):
     patchcore_result: StageResult
     yolo_status: YoloStatus
     final_result: FinalResult
+    centering_state: CenteringState   # 마지막으로 확인한 센터링 상태
+    interlock_state: InterlockState   # 마지막으로 확인한 인터락 상태
+    active_alarms: int = 0            # 해제 안 된 안전 알람 수
     defect_count: int                # YOLO 결함 개수
     defect_classes: list[str]        # 결함 종류 (중복 제거)
     capture_count: int               # 사진 장수
@@ -199,6 +208,7 @@ class InspectionDetailOut(InspectionSummaryOut):
     dimension: DimensionOut | None = None
     defects: list[YoloDefectOut] = []
     images: list[ImageFileOut] = []
+    alarms: list["AlarmOut"] = []     # 이 검사의 안전 알람 이력
 
 
 class InspectionPage(BaseModel):
@@ -226,6 +236,46 @@ class DefectTypeOut(DefectTypeIn):
     model_config = ConfigDict(from_attributes=True)
     defect_code: str
     updated_at: datetime | None = None
+
+
+# =========================================================================
+# 장비 안전 (센터링 · 인터락)
+# =========================================================================
+class SafetyCheckIn(BaseModel):
+    """검사 프로그램이 확인한 장비 상태. 이상이면 서버가 알람을 기록하고 allowed=false 를 돌려준다.
+    센서 응답이 끊겼으면 UNKNOWN 으로 보낸다 (검사 금지)"""
+    inspection_id: str | None = Field(default=None, pattern=ID_PATTERN)  # 시작 전 확인이면 없어도 됨
+    product_name: str | None = Field(default=None, pattern=NAME_PATTERN)  # 검사 행이 없을 때 만들기용
+    stage: InspectionStage = InspectionStage.PRECHECK
+    centering_state: CenteringState = CenteringState.UNKNOWN
+    interlock_state: InterlockState = InterlockState.UNKNOWN
+    message: str | None = Field(default=None, max_length=500)
+
+
+class AlarmOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    inspection_id: str | None = None
+    alarm_type: AlarmType
+    alarm_status: AlarmStatus
+    centering_state: CenteringState
+    interlock_state: InterlockState
+    inspection_stage: InspectionStage
+    alarm_message: str | None = None
+    occurred_at: datetime
+    cleared_at: datetime | None = None
+
+
+class SafetyCheckOut(BaseModel):
+    allowed: bool                 # 검사 허용 (센터링 OFF AND 인터락 0)
+    alarms: list[AlarmOut] = []   # 이번에 새로 기록한 알람 (같은 검사·같은 종류의 발생 중 알람이 있으면 새로 안 만듦)
+
+
+class AlarmPage(BaseModel):
+    total: int
+    page: int
+    size: int
+    items: list[AlarmOut]
 
 
 # =========================================================================
@@ -264,6 +314,8 @@ class DashboardSummary(BaseModel):
     defect_classes: list[LabelCount]  # YOLO 결함 종류별 개수
     defect_codes: list[LabelCount]    # 지정된 불량 코드별 개수 (D01~D05, 미분류)
     recent_defects: list[InspectionSummaryOut]
+    active_alarms: int = 0                 # 지금 발생 중(해제 안 된) 안전 알람 수 (날짜와 무관)
+    alarms_today: int = 0                  # 그날 발생한 안전 알람 수
 
 
 class TrendPoint(BaseModel):
@@ -271,3 +323,6 @@ class TrendPoint(BaseModel):
     label: str
     total: int
     defect: int
+
+
+InspectionDetailOut.model_rebuild()

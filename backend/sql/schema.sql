@@ -1,10 +1,12 @@
--- VisionQC AI MES - MySQL 8.0.16 이상 스키마 (테이블 4개, 검사 1회 단위)
+-- VisionQC AI MES - MySQL 8.0.16 이상 스키마 (테이블 5개, 검사 1회 단위)
+-- 검사 허용: 센터링 OFF(정위치) AND 인터락 0(정상). ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 금지
 -- 서버(backend)를 처음 실행하면 테이블은 자동 생성되므로, 여기서는 DB와 계정만 만들어도 된다.
 -- 이 파일의 테이블 정의는 backend/app/models.py 와 같은 구조 (구조 확인 / Workbench 에서 직접 만들 때용)
 --
 -- 관계
 --   product_inspection.inspection_id ─ 1 : 0..1 ─ product_dimension_inspection.inspection_id   (실제 외래키)
 --   product_inspection.yolo_defect_data[*].defect_code ··· defect_type.defect_code            (JSON 안 논리 참조, 외래키 없음)
+--   product_inspection.inspection_id ─ 1 : 0..N ─ equipment_safety_alarm.inspection_id      (실제 외래키, 시작 전 알람은 NULL)
 --   admin_user ··· 검사 결과 조회 · 리포트 수신                                                  (논리 참조)
 --
 -- [자동] 컬럼 = GENERATED ALWAYS AS (...) STORED. 애플리케이션이 값을 넣지 않고 MySQL 이 계산한다.
@@ -25,6 +27,8 @@ CREATE TABLE IF NOT EXISTS product_inspection (
     inspection_id           VARCHAR(64)  NOT NULL UNIQUE,                       -- 검사 고유번호 (날짜 포함, 예: 20261006_inspection_143000_001)
     product_name            VARCHAR(50)  NOT NULL,                              -- 제품 모델명 (redcar)
     product_serial          VARCHAR(64)  NULL,                                  -- 개별 제품 식별번호
+    centering_state         VARCHAR(8)   NOT NULL DEFAULT 'UNKNOWN',            -- 센터링: OFF 정위치 / ON 위치 이상 / UNKNOWN 미확인 (마지막 확인 값)
+    interlock_state         VARCHAR(8)   NOT NULL DEFAULT 'UNKNOWN',            -- 인터락: 0 정상 / 1 비정상 / UNKNOWN 미확인 (마지막 확인 값)
     dimension_result        VARCHAR(16)  NOT NULL DEFAULT 'PENDING',            -- 3D 치수 합불 판정 (치수 테이블 결과를 서버가 반영)
     dimension_data          JSON         NULL,                                  -- 치수 상세 데이터
     scan_file_path          VARCHAR(500) NULL,                                  -- 3D 스캔 파일 경로
@@ -54,6 +58,8 @@ CREATE TABLE IF NOT EXISTS product_inspection (
     CONSTRAINT ck_pi_dimension_result CHECK (dimension_result IN ('PENDING','PASS','RECHECK','FAIL')),
     CONSTRAINT ck_pi_patchcore_result CHECK (patchcore_result IN ('PENDING','PASS','FAIL')),
     CONSTRAINT ck_pi_yolo_status      CHECK (yolo_status IN ('NOT_STARTED','IN_PROGRESS','COMPLETED')),
+    CONSTRAINT ck_pi_centering_state  CHECK (centering_state IN ('OFF','ON','UNKNOWN')),
+    CONSTRAINT ck_pi_interlock_state  CHECK (interlock_state IN ('0','1','UNKNOWN')),
     INDEX ix_pi_product_created (product_name, created_at),
     INDEX ix_product_inspection_product_serial (product_serial),
     INDEX ix_product_inspection_final_result (final_result),
@@ -73,6 +79,8 @@ CREATE TABLE IF NOT EXISTS product_inspection (
 CREATE TABLE IF NOT EXISTS product_dimension_inspection (
     id                 INT AUTO_INCREMENT PRIMARY KEY,                         -- 치수 검사 행 식별번호
     inspection_id      VARCHAR(64) NOT NULL UNIQUE,                            -- 전체 검사와 연결하는 검사번호
+    centering_state    VARCHAR(8)  NOT NULL DEFAULT 'UNKNOWN',                 -- 측정 시점 센터링 (OFF / ON / UNKNOWN)
+    interlock_state    VARCHAR(8)  NOT NULL DEFAULT 'UNKNOWN',                 -- 측정 시점 인터락 (0 / 1 / UNKNOWN)
     width_mm           DOUBLE NULL,                                            -- 실측 가로 (mm)
     length_mm          DOUBLE NULL,                                            -- 실측 길이 (mm)
     height_mm          DOUBLE NULL,                                            -- 실측 높이 (mm)
@@ -110,6 +118,8 @@ CREATE TABLE IF NOT EXISTS product_dimension_inspection (
     scan_file_path     VARCHAR(500) NULL,                                      -- 3D 스캔 원본 경로
     created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT ck_pdi_centering_state CHECK (centering_state IN ('OFF','ON','UNKNOWN')),
+    CONSTRAINT ck_pdi_interlock_state CHECK (interlock_state IN ('0','1','UNKNOWN')),
     CONSTRAINT fk_pdi_inspection FOREIGN KEY (inspection_id)
         REFERENCES product_inspection (inspection_id) ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -159,4 +169,33 @@ CREATE TABLE IF NOT EXISTS admin_user (
     created_at             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT ck_admin_role CHECK (role IN ('SUPER_ADMIN','ADMIN','VIEWER'))
+);
+
+-- ---------------------------------------------------------------------------
+-- 장비 안전 알람: 센터링 · 인터락 발생 / 해제 이력
+-- 한 검사에 여러 알람 가능. 두 조건 모두 이상이면 각각 1행. 정지 후 이력을 저장하며,
+-- 알람 해제만으로 검사가 자동으로 다시 시작되지는 않는다 (DB 는 기록용, 장비 정지는 검사 프로그램이 함)
+-- 검사를 지워도 알람 이력은 남는다 (inspection_id 만 NULL)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS equipment_safety_alarm (
+    id               INT AUTO_INCREMENT PRIMARY KEY,                           -- 알람 식별번호
+    inspection_id    VARCHAR(64)  NULL,                                        -- 관련 검사번호 (시작 전이면 NULL)
+    alarm_type       VARCHAR(16)  NOT NULL,                                    -- CENTERING 센터링 / INTERLOCK 인터락
+    alarm_status     VARCHAR(16)  NOT NULL DEFAULT 'ACTIVE',                   -- ACTIVE 발생 중 / CLEARED 해제됨
+    centering_state  VARCHAR(8)   NOT NULL,                                    -- 알람 시점 센터링 상태
+    interlock_state  VARCHAR(8)   NOT NULL,                                    -- 알람 시점 인터락 상태
+    inspection_stage VARCHAR(16)  NOT NULL,                                    -- PRECHECK 사전 확인 / DIMENSION 치수 / PATCHCORE / YOLO
+    alarm_message    TEXT         NULL,                                        -- 알람 상세 내용
+    occurred_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,          -- 알람 발생 시각
+    cleared_at       DATETIME     NULL,                                        -- 알람 해제 확인 시각
+    CONSTRAINT ck_alarm_type            CHECK (alarm_type IN ('CENTERING','INTERLOCK')),
+    CONSTRAINT ck_alarm_status          CHECK (alarm_status IN ('ACTIVE','CLEARED')),
+    CONSTRAINT ck_alarm_centering_state CHECK (centering_state IN ('OFF','ON','UNKNOWN')),
+    CONSTRAINT ck_alarm_interlock_state CHECK (interlock_state IN ('0','1','UNKNOWN')),
+    CONSTRAINT ck_alarm_stage           CHECK (inspection_stage IN ('PRECHECK','DIMENSION','PATCHCORE','YOLO')),
+    INDEX ix_equipment_safety_alarm_inspection_id (inspection_id),
+    INDEX ix_alarm_status_time (alarm_status, occurred_at),
+    INDEX ix_equipment_safety_alarm_occurred_at (occurred_at),
+    CONSTRAINT fk_alarm_inspection FOREIGN KEY (inspection_id)
+        REFERENCES product_inspection (inspection_id) ON DELETE SET NULL ON UPDATE CASCADE
 );

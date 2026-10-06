@@ -5,17 +5,21 @@ DB 테이블 정의 (models.py) - SQLAlchemy ORM
 `Base.metadata.create_all()` 이 여기 정의된 테이블 중 없는 것을 자동으로 만든다.
 (MySQL 에 직접 만들 때 쓰는 SQL 은 backend/sql/schema.sql - 이 파일과 같은 구조)
 
-테이블 4개 (검사 1회 단위)
+테이블 5개 (검사 1회 단위)
   product_inspection            전체 검사. 제품 한 개의 검사 1회 = 한 행
                                 3D 치수 → PatchCore → YOLO 단계별 결과를 한 행에 모으고
                                 final_result 는 단계별 결과에서 DB 가 자동 계산
   product_dimension_inspection  3D 치수 (전체 검사 1회당 0~1행). 축별·종합 합불은 DB 가 자동 계산
   defect_type                   불량 종류 D01~D05 + 원인 후보 + 권장 조치
   admin_user                    관리자 계정 (SUPER_ADMIN / ADMIN / VIEWER) + 리포트 수신 설정
+  equipment_safety_alarm        장비 안전 알람 (센터링 · 인터락) 발생 / 해제 이력
+검사 테이블 2개에는 장비 상태 컬럼(centering_state, interlock_state, 미확인 기본값 UNKNOWN)이 있다.
+검사 허용: 센터링 OFF(정위치) AND 인터락 0(정상). ON / 1 / UNKNOWN / 센서 응답 끊김이면 검사 금지
 
 관계
   product_inspection.inspection_id ─ 1 : 0..1 ─ product_dimension_inspection.inspection_id  (실제 외래키)
   product_inspection.yolo_defect_data[*].defect_code ··· defect_type.defect_code          (JSON 안 논리 참조)
+  product_inspection.inspection_id ─ 1 : 0..N ─ equipment_safety_alarm.inspection_id       (실제 외래키, 시작 전 알람은 NULL)
   admin_user ··· 검사 결과 조회 · 리포트 수신                                                (논리 참조)
 
 [자동] 컬럼은 MySQL/SQLite 의 생성 컬럼(GENERATED ... STORED)이라 애플리케이션이 값을 넣지 않는다.
@@ -24,8 +28,8 @@ import enum
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import (JSON, Boolean, Computed, DateTime, Double, Enum, ForeignKey, Index,
-                        Integer, String, Text, func)
+from sqlalchemy import (JSON, Boolean, CheckConstraint, Computed, DateTime, Double, Enum, ForeignKey,
+                        Index, Integer, String, Text, func)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -76,6 +80,53 @@ class Role(str, enum.Enum):
     SUPER_ADMIN = "SUPER_ADMIN"  # 최고관리자: 계정 관리 + 아래 전부
     ADMIN = "ADMIN"              # 관리자: 불량 분류·불량 종류 수정·검사 삭제
     VIEWER = "VIEWER"            # 조회 전용
+
+
+# ---- 장비 안전 상태 (센터링 · 인터락) ----
+# 검사 허용 조건: 센터링 OFF(정위치) AND 인터락 0(정상). 그 외(ON, 1, UNKNOWN, 센서 응답 끊김)는 검사 금지
+class CenteringState(str, enum.Enum):
+    """센터링 상태"""
+    OFF = "OFF"          # 정위치 (정상)
+    ON = "ON"            # 위치 이상
+    UNKNOWN = "UNKNOWN"  # 미확인 / 센서 응답 없음
+
+
+class InterlockState(str, enum.Enum):
+    """인터락 상태"""
+    NORMAL = "0"         # 정상
+    ABNORMAL = "1"       # 비정상
+    UNKNOWN = "UNKNOWN"  # 미확인 / 센서 응답 없음
+
+
+class AlarmType(str, enum.Enum):
+    CENTERING = "CENTERING"  # 센터링 이상 (ON 또는 미확인)
+    INTERLOCK = "INTERLOCK"  # 인터락 이상 (1 또는 미확인)
+
+
+class AlarmStatus(str, enum.Enum):
+    ACTIVE = "ACTIVE"    # 발생 중
+    CLEARED = "CLEARED"  # 해제됨 (해제만으로 검사가 자동 재시작되지는 않음)
+
+
+class InspectionStage(str, enum.Enum):
+    """알람이 난 검사 단계"""
+    PRECHECK = "PRECHECK"    # 사전 확인 (검사 시작 전)
+    DIMENSION = "DIMENSION"  # 3D 치수
+    PATCHCORE = "PATCHCORE"
+    YOLO = "YOLO"
+
+
+def safety_allowed(centering, interlock) -> bool:
+    """검사 허용 여부: 센터링 OFF 그리고 인터락 0 일 때만 (Enum 이든 문자열이든 받음)"""
+    c, i = getattr(centering, "value", centering), getattr(interlock, "value", interlock)
+    return c == CenteringState.OFF.value and i == InterlockState.NORMAL.value
+
+
+def _check(name: str, column: str, enum_cls, nullable: bool = False) -> CheckConstraint:
+    """허용값 CHECK 제약 (MySQL 8.0.16+ 에서 실제로 검사됨). 이름은 스키마 안에서 고유해야 한다"""
+    values = ",".join(f"'{e.value}'" for e in enum_cls)
+    cond = f"{column} IN ({values})"
+    return CheckConstraint(f"{column} IS NULL OR {cond}" if nullable else cond, name=name)
 
 
 # ---------------------------------------------------------------------------
@@ -135,22 +186,29 @@ class ProductInspection(Base):
     product_name: Mapped[str] = mapped_column(String(50))                      # 제품 모델명 (redcar)
     product_serial: Mapped[Optional[str]] = mapped_column(String(64), nullable=True, index=True)  # 개별 제품 식별번호
 
+    # ---- 장비 안전 상태 (마지막으로 확인한 값. 미확인 기본값 UNKNOWN)
+    centering_state: Mapped[str] = mapped_column(
+        Enum(CenteringState, native_enum=False, length=8), default=CenteringState.UNKNOWN)  # 센터링: OFF 정위치 / ON 위치 이상
+    interlock_state: Mapped[str] = mapped_column(
+        Enum(InterlockState, native_enum=False, length=8,
+             values_callable=lambda e: [m.value for m in e]), default=InterlockState.UNKNOWN)  # 인터락: 0 정상 / 1 비정상
+
     # ---- 3D 치수 (치수 테이블 결과를 서버가 복사해 둠)
     dimension_result: Mapped[str] = mapped_column(
-        Enum(StageResult, native_enum=False, length=16, create_constraint=True), default=StageResult.PENDING)  # 3D 치수 합불 판정
+        Enum(StageResult, native_enum=False, length=16), default=StageResult.PENDING)  # 3D 치수 합불 판정
     dimension_data: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)        # 치수 상세 데이터 (JSON)
     scan_file_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # 3D 스캔 파일 경로
 
     # ---- PatchCore
     patchcore_result: Mapped[str] = mapped_column(
-        Enum(StageResult, native_enum=False, length=16, create_constraint=True), default=StageResult.PENDING)  # PatchCore 합불 판정
+        Enum(StageResult, native_enum=False, length=16), default=StageResult.PENDING)  # PatchCore 합불 판정
     patchcore_score: Mapped[Optional[float]] = mapped_column(Double, nullable=True)     # 이상 점수
     patchcore_threshold: Mapped[Optional[float]] = mapped_column(Double, nullable=True)  # 검사 당시 판정 기준
     patchcore_model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
 
     # ---- YOLO
     yolo_status: Mapped[str] = mapped_column(
-        Enum(YoloStatus, native_enum=False, length=16, create_constraint=True), default=YoloStatus.NOT_STARTED)  # YOLO 검사 진행 상태
+        Enum(YoloStatus, native_enum=False, length=16), default=YoloStatus.NOT_STARTED)  # YOLO 검사 진행 상태
     # 불량별 검출 정보 배열. 원소: {capture_number, defect_class, confidence, box, angle_deg, defect_code}
     yolo_defect_data: Mapped[list] = mapped_column(JSON, default=list)
     yolo_model_version: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
@@ -175,8 +233,17 @@ class ProductInspection(Base):
     dimension: Mapped[Optional["ProductDimensionInspection"]] = relationship(
         back_populates="inspection", uselist=False, cascade="all, delete-orphan", lazy="selectin")
 
+    # 알람 이력 (0~N개). 검사를 지워도 알람 이력은 남긴다 (inspection_id 만 NULL 이 됨)
+    alarms: Mapped[list["EquipmentSafetyAlarm"]] = relationship(
+        back_populates="inspection", passive_deletes=True, order_by="EquipmentSafetyAlarm.occurred_at")
+
     __table_args__ = (
         Index("ix_pi_product_created", "product_name", "created_at"),
+        _check("ck_pi_dimension_result", "dimension_result", StageResult),
+        _check("ck_pi_patchcore_result", "patchcore_result", StageResult),
+        _check("ck_pi_yolo_status", "yolo_status", YoloStatus),
+        _check("ck_pi_centering_state", "centering_state", CenteringState),
+        _check("ck_pi_interlock_state", "interlock_state", InterlockState),
     )
 
 
@@ -188,6 +255,12 @@ class ProductDimensionInspection(Base):
     inspection_id: Mapped[str] = mapped_column(
         ForeignKey("product_inspection.inspection_id", ondelete="CASCADE", onupdate="CASCADE"),
         unique=True)                                                              # 전체 검사와 연결하는 검사번호
+    # 치수 측정 시점의 장비 상태 (검사 프로그램이 같이 기록, 미확인 기본값 UNKNOWN)
+    centering_state: Mapped[str] = mapped_column(
+        Enum(CenteringState, native_enum=False, length=8), default=CenteringState.UNKNOWN)
+    interlock_state: Mapped[str] = mapped_column(
+        Enum(InterlockState, native_enum=False, length=8,
+             values_callable=lambda e: [m.value for m in e]), default=InterlockState.UNKNOWN)
     width_mm: Mapped[Optional[float]] = mapped_column(Double, nullable=True)       # 실측 가로
     length_mm: Mapped[Optional[float]] = mapped_column(Double, nullable=True)      # 실측 길이
     height_mm: Mapped[Optional[float]] = mapped_column(Double, nullable=True)      # 실측 높이
@@ -203,6 +276,44 @@ class ProductDimensionInspection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=func.now(), onupdate=datetime.now)
 
     inspection: Mapped[ProductInspection] = relationship(back_populates="dimension")
+
+    __table_args__ = (
+        _check("ck_pdi_centering_state", "centering_state", CenteringState),
+        _check("ck_pdi_interlock_state", "interlock_state", InterlockState),
+    )
+
+
+class EquipmentSafetyAlarm(Base):
+    """장비 안전 알람 (센터링 · 인터락) 발생 / 해제 이력.
+    한 검사에 여러 알람 가능. 두 조건이 모두 이상이면 각각 1행씩 기록. 정지 후 이력을 저장하며,
+    알람 해제만으로 검사가 자동으로 다시 시작되지는 않는다"""
+    __tablename__ = "equipment_safety_alarm"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)                      # 알람 식별번호
+    inspection_id: Mapped[Optional[str]] = mapped_column(
+        ForeignKey("product_inspection.inspection_id", ondelete="SET NULL", onupdate="CASCADE"),
+        nullable=True, index=True)                                                  # 관련 검사번호 (시작 전이면 NULL)
+    alarm_type: Mapped[str] = mapped_column(Enum(AlarmType, native_enum=False, length=16))      # CENTERING / INTERLOCK
+    alarm_status: Mapped[str] = mapped_column(
+        Enum(AlarmStatus, native_enum=False, length=16), default=AlarmStatus.ACTIVE)           # ACTIVE 발생 중 / CLEARED 해제됨
+    centering_state: Mapped[str] = mapped_column(Enum(CenteringState, native_enum=False, length=8))  # 알람 시점 센터링 상태
+    interlock_state: Mapped[str] = mapped_column(
+        Enum(InterlockState, native_enum=False, length=8, values_callable=lambda e: [m.value for m in e]))  # 알람 시점 인터락 상태
+    inspection_stage: Mapped[str] = mapped_column(Enum(InspectionStage, native_enum=False, length=16))  # 사전 확인 / 치수 / PatchCore / YOLO
+    alarm_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)       # 알람 상세 내용
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=func.now(), index=True)  # 발생 시각
+    cleared_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 해제 확인 시각
+
+    inspection: Mapped[Optional[ProductInspection]] = relationship(back_populates="alarms")
+
+    __table_args__ = (
+        Index("ix_alarm_status_time", "alarm_status", "occurred_at"),
+        _check("ck_alarm_type", "alarm_type", AlarmType),
+        _check("ck_alarm_status", "alarm_status", AlarmStatus),
+        _check("ck_alarm_centering_state", "centering_state", CenteringState),
+        _check("ck_alarm_interlock_state", "interlock_state", InterlockState),
+        _check("ck_alarm_stage", "inspection_stage", InspectionStage),
+    )
 
 
 class DefectType(Base):
@@ -230,9 +341,11 @@ class AdminUser(Base):
     password_hash: Mapped[str] = mapped_column(String(100))                     # 비밀번호 해시값
     name: Mapped[str] = mapped_column(String(50))                               # 관리자 이름
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)  # 이메일 및 리포트 수신 주소
-    role: Mapped[str] = mapped_column(Enum(Role, native_enum=False, length=16, create_constraint=True), default=Role.VIEWER)
+    role: Mapped[str] = mapped_column(Enum(Role, native_enum=False, length=16), default=Role.VIEWER)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)              # 계정 활성 여부
     receive_defect_reports: Mapped[bool] = mapped_column(Boolean, default=False)  # 불량 리포트 수신 여부
     last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 마지막 로그인 성공 시각
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, server_default=func.now(), onupdate=datetime.now)
+
+    __table_args__ = (_check("ck_admin_role", "role", Role),)

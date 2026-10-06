@@ -120,6 +120,7 @@ export default function Inspections() {
               <th>PatchCore</th>
               <th>YOLO</th>
               <th>결함</th>
+              <th>안전</th>
               <th>최종 결과</th>
             </tr>
           </thead>
@@ -135,11 +136,16 @@ export default function Inspections() {
                 <td><StageBadge value={r.patchcore_result} /></td>
                 <td><YoloBadge value={r.yolo_status} /></td>
                 <td className="small">{r.defect_count ? `${r.defect_classes.join(", ")} · ${r.defect_count}건` : "-"}</td>
+                <td>
+                  {r.active_alarms > 0 ? <span className="badge ng">알람 {r.active_alarms}</span>
+                    : r.centering_state === "OFF" && r.interlock_state === "0" ? <span className="badge ok">정상</span>
+                    : <span className="badge wip">미확인</span>}
+                </td>
                 <td><FinalBadge value={r.final_result} /></td>
               </tr>
             ))}
             {!loading && data.items.length === 0 && (
-              <tr><td colSpan={10} className="center muted">조건에 맞는 검사가 없습니다.</td></tr>
+              <tr><td colSpan={11} className="center muted">조건에 맞는 검사가 없습니다.</td></tr>
             )}
           </tbody>
         </table>

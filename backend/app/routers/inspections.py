@@ -153,6 +153,9 @@ def delete_inspection(inspection_id: str, db: Session = Depends(get_db),
     insp = get_or_404(db, inspection_id)
     paths = [p for f in (insp.image_files or [])
              for p in (f.get("original_path"), f.get("annotated_path"), f.get("metadata_path")) if p]
+    for alarm in insp.alarms:  # 알람 이력은 남기고 검사번호 연결만 끊는다
+        alarm.inspection_id = None
+    db.flush()
     db.delete(insp)       # 치수 행은 cascade 로 같이 삭제
     db.commit()
     for p in paths:       # DB 삭제가 끝난 뒤 파일 삭제

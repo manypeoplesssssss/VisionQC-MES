@@ -19,6 +19,7 @@ export default function Layout() {
           <NavLink to="/" end>대시보드</NavLink>
           <NavLink to="/inspections">검사 조회</NavLink>
           <NavLink to="/defect-types">불량 종류</NavLink>
+          <NavLink to="/alarms">안전 알람</NavLink>
           {user?.role === "SUPER_ADMIN" && <NavLink to="/users">계정 관리</NavLink>}
         </nav>
         <div className="user">

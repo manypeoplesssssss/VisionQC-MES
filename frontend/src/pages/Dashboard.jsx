@@ -78,11 +78,17 @@ export default function Dashboard() {
 
       {summary && (
         <>
+          {summary.active_alarms > 0 && (
+            <Link className="alarm-banner" to="/alarms?status=ACTIVE">
+              <b>안전 알람 {summary.active_alarms}건 발생 중</b>
+              <span>센터링·인터락 이상으로 검사가 보류된 상태입니다. 현장 확인 후 해제하세요 →</span>
+            </Link>
+          )}
           <section className="kpis">
             <Kpi label="검사" value={summary.total} sub="검사 1회 = 1건" />
             <Kpi label="정상" value={summary.normal} tone="ok" sub="치수·PatchCore 합격" />
             <Kpi label="불량" value={summary.defect} tone="ng" sub="치수 또는 PatchCore 불합격" />
-            <Kpi label="대기" value={summary.pending} tone="wip" sub="치수·PatchCore 검사 전" />
+            <Kpi label="대기" value={summary.pending} tone="wip" sub={`치수·PatchCore 검사 전 · 안전 알람 ${summary.alarms_today}건`} />
             <Kpi label="불량률" value={`${summary.defect_rate}%`} tone={summary.defect_rate >= 5 ? "ng" : ""} sub="판정 끝난 검사 기준" />
           </section>
 

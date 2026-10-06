@@ -181,6 +181,11 @@ th.num, td.num { text-align: right; }
 .final-cell .num { font-size: 18px; font-weight: 700; }
 .no-img { aspect-ratio: 4/3; display: grid; place-items: center; background: #f1f3f6; color: var(--muted); font-size: 12px; }
 
+/* 안전 알람 배너 (대시보드) */
+.alarm-banner { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; background: var(--ng-bg); color: var(--ng); border: 1px solid #f1b4b8; border-radius: 10px; padding: 12px 16px; margin-bottom: 16px; }
+.alarm-banner:hover { text-decoration: none; border-color: var(--ng); }
+.alarm-banner span { font-size: 13px; }
+
 /* 검사 상세 */
 .kv.wide { grid-template-columns: 90px 1fr; margin: 0; }
 .advice { white-space: pre-wrap; font-family: inherit; font-size: 13px; background: var(--wip-bg); border-radius: 8px; padding: 12px; margin: 0 0 8px; }

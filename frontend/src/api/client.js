@@ -99,6 +99,11 @@ export const FINAL_RESULTS = [
   { code: "PROCESS_DEFECT", label: "공정 불량", tone: "ng" },
 ];
 export const finalLabel = (code) => FINAL_RESULTS.find((f) => f.code === code)?.label ?? code;
+/** 장비 안전 상태 (센터링 · 인터락). 검사 허용: 센터링 OFF + 인터락 0 */
+export const CENTERING_LABEL = { OFF: "정위치", ON: "위치 이상", UNKNOWN: "미확인" };
+export const INTERLOCK_LABEL = { "0": "정상", "1": "비정상", UNKNOWN: "미확인" };
+export const ALARM_TYPE_LABEL = { CENTERING: "센터링", INTERLOCK: "인터락" };
+export const STAGE_NAME = { PRECHECK: "사전 확인", DIMENSION: "3D 치수", PATCHCORE: "PatchCore", YOLO: "YOLO" };
 /** 관리자 권한 */
 export const ROLE_LABEL = { SUPER_ADMIN: "최고관리자", ADMIN: "관리자", VIEWER: "조회 전용" };
 export const isAdmin = (user) => user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
@@ -133,6 +138,10 @@ export const api = {
   // 불량 종류
   defectTypes: () => request("/api/defect-types"),
   saveDefectType: (code, body) => request(`/api/defect-types/${enc(code)}`, { method: "PUT", body }),
+
+  // 장비 안전 알람 (센터링 · 인터락)
+  alarms: (params) => request("/api/safety/alarms", { params }),
+  clearAlarm: (id) => request(`/api/safety/alarms/${id}/clear`, { method: "POST" }),
 
   // 관리자 계정 (최고관리자)
   users: () => request("/api/users"),

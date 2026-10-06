@@ -14,8 +14,8 @@ from fastapi import HTTPException
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
 
-from ..models import DefectType, FinalResult, ProductInspection
-from ..schemas import (DimensionOut, ImageFileOut, InspectionDetailOut, InspectionSummaryOut,
+from ..models import AlarmStatus, DefectType, FinalResult, ProductInspection
+from ..schemas import (AlarmOut, DimensionOut, ImageFileOut, InspectionDetailOut, InspectionSummaryOut,
                        YoloDefectOut)
 from ..storage import image_url
 
@@ -96,6 +96,9 @@ def to_summary(insp: ProductInspection) -> InspectionSummaryOut:
         patchcore_result=insp.patchcore_result,
         yolo_status=insp.yolo_status,
         final_result=insp.final_result,
+        centering_state=insp.centering_state,
+        interlock_state=insp.interlock_state,
+        active_alarms=sum(1 for a in insp.alarms if getattr(a.alarm_status, "value", a.alarm_status) == AlarmStatus.ACTIVE.value),
         defect_count=len(defects),
         defect_classes=sorted({d.get("defect_class") or "unknown" for d in defects}),
         capture_count=len(images),
@@ -136,6 +139,7 @@ def to_detail(insp: ProductInspection, db: Session) -> InspectionDetailOut:
         dimension=DimensionOut.model_validate(insp.dimension) if insp.dimension else None,
         defects=defects,
         images=images,
+        alarms=[AlarmOut.model_validate(a) for a in insp.alarms],
     )
 
 

@@ -6,7 +6,7 @@
 
 MES 는 "검사 1회 = product_inspection 1행" 이다. 같은 inspection_id 로 단계별 결과를 채워 넣는다.
 
-    from mes_client import MESClient, yolo_to_defects
+    from mes_client import MESClient, safety_ok, yolo_to_defects
 
     mes = MESClient("http://MES서버IP:8000", api_key="change-this-ingest-key")
     iid = "20261006_inspection_143000_001"          # 검사 고유번호 (날짜 포함 권장)
@@ -17,6 +17,11 @@ MES 는 "검사 1회 = product_inspection 1행" 이다. 같은 inspection_id 로
     mes.send_yolo_capture(iid, 1, "c001.jpg", "c001_annotated.jpg",   # 3) YOLO 결함 사진 1장씩
                           defects=yolo_to_defects(result, conf_min=0.8), angle_deg=95.0)
     mes.complete_yolo(iid)                                   # 4) YOLO 분류 완료
+
+    # 장비 안전 (센터링 · 인터락): 시작 전과 각 단계 중에 확인. 허용 판단은 safety_ok() 로 이 PC 에서 바로
+    if not safety_ok(centering, interlock):                  # 센터링 OFF + 인터락 0 이 아니면
+        stop_equipment()                                     #   장비 정지 → 검사 보류 (검사 프로그램이 직접)
+    mes.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기록 (이상이면 MES 가 알람 저장)
 
 최종 결과(final_result)는 서버 DB 가 단계별 결과에서 자동으로 계산한다.
 
@@ -61,7 +66,8 @@ class MESClient:
         timeout       : 요청 1번 기다리는 최대 시간(초)
         model_version : 기본으로 붙일 AI 모델 버전 (PatchCore/YOLO 전송 때 따로 줄 수도 있음)
         """
-        self.base = base_url.rstrip("/") + "/api/inspections"
+        self.root = base_url.rstrip("/")
+        self.base = self.root + "/api/inspections"
         self.headers = {"X-API-Key": api_key}
         self.queue_dir = Path(queue_dir)
         self.queue_dir.mkdir(parents=True, exist_ok=True)
@@ -81,10 +87,16 @@ class MESClient:
 
     def send_dimension(self, inspection_id: str, width: float | None, length: float | None,
                        height: float | None, standards: tuple[float, float, float] | None = None,
-                       scan_file_path: str | None = None) -> dict | None:
-        """3D 치수 측정값 (mm). standards=(가로, 길이, 높이) 를 안 주면 서버 설정의 기준을 쓴다"""
+                       scan_file_path: str | None = None, centering: str | None = None,
+                       interlock: str | None = None) -> dict | None:
+        """3D 치수 측정값 (mm). standards=(가로, 길이, 높이) 를 안 주면 서버 설정의 기준을 쓴다.
+        centering("OFF"/"ON"/"UNKNOWN"), interlock("0"/"1"/"UNKNOWN") 은 측정 시점 장비 상태 (안 주면 서버가 미확인으로 기록)"""
         body = {"width_mm": _r(width), "length_mm": _r(length), "height_mm": _r(height),
                 "scan_file_path": scan_file_path}
+        if centering is not None:
+            body["centering_state"] = centering
+        if interlock is not None:
+            body["interlock_state"] = interlock
         if standards:
             body.update(standard_width_mm=standards[0], standard_length_mm=standards[1],
                         standard_height_mm=standards[2])
@@ -118,12 +130,24 @@ class MESClient:
         return self._send("PUT", inspection_id, "/yolo/complete",
                           json_body={"model_version": model_version or self.model_version})
 
+    def check_safety(self, stage: str, centering: str, interlock: str, inspection_id: str | None = None,
+                     message: str | None = None) -> dict | None:
+        """장비 안전 상태(센터링·인터락)를 MES 에 기록. 이상이면 MES 가 알람을 남긴다.
+        stage: PRECHECK / DIMENSION / PATCHCORE / YOLO. 반환: {"allowed": bool, "alarms": [...]} 또는 None(큐)
+        ※ 검사를 멈출지는 서버 응답을 기다리지 말고 safety_ok() 로 이 PC 에서 바로 판단할 것"""
+        body = {"stage": stage, "centering_state": centering, "interlock_state": interlock, "message": message}
+        if inspection_id:
+            body.update(inspection_id=inspection_id, product_name=self.product_name.get(inspection_id))
+        return self._send("POST", None, "", json_body=body, path="/api/safety/check")
+
     # ------------------------------------------------------------------ 공통 전송 · 큐
-    def _send(self, method: str, inspection_id: str, suffix: str, json_body: dict | None = None,
-              form: dict | None = None, files: dict[str, Path] | None = None) -> dict | None:
-        """밀린 큐 먼저 → 이번 요청 전송 (실패 시 큐)"""
-        req = {"method": method, "inspection_id": inspection_id, "suffix": suffix,
-               "product_name": self.product_name.get(inspection_id), "json": json_body, "form": form}
+    def _send(self, method: str, inspection_id: str | None, suffix: str, json_body: dict | None = None,
+              form: dict | None = None, files: dict[str, Path] | None = None,
+              path: str | None = None) -> dict | None:
+        """밀린 큐 먼저 → 이번 요청 전송 (실패 시 큐). path 를 주면 검사 주소 대신 그 주소로 보낸다"""
+        req = {"method": method, "inspection_id": inspection_id, "suffix": suffix, "path": path,
+               "product_name": self.product_name.get(inspection_id) if inspection_id else None,
+               "json": json_body, "form": form}
         self.flush_queue()  # 밀린 것부터 보내서 순서 유지
         if self.pending():  # 아직 못 보낸 게 남아 있으면 새 요청도 뒤에 줄 세움 (순서 + 대기시간 절약)
             self._enqueue(req, files or {})
@@ -137,7 +161,10 @@ class MESClient:
 
     def _request(self, req: dict, files: dict[str, Path]) -> dict:
         """실제 HTTP 전송"""
-        url = f"{self.base}/{req['inspection_id']}{req['suffix']}"
+        if req.get("path"):
+            url = self.root + req["path"]
+        else:
+            url = f"{self.base}/{req['inspection_id']}{req['suffix']}"
         params = {"product_name": req["product_name"]} if req.get("product_name") else None
         opened = {k: open(p, "rb") for k, p in files.items()}
         try:
@@ -157,7 +184,8 @@ class MESClient:
         if r.status_code >= 400:   # 데이터/키 문제 → 다시 보내도 같으니 바로 에러
             raise MESError(f"{r.status_code} {r.text[:500]}")
         res = r.json()
-        log.info("MES 등록: %s%s → %s", req["inspection_id"], req["suffix"], res.get("final_result"))
+        log.info("MES 등록: %s → %s", req.get("path") or f"{req['inspection_id']}{req['suffix']}",
+                 res.get("final_result", res.get("allowed")))
         return res
 
     def _enqueue(self, req: dict, files: dict[str, Path]):
@@ -202,6 +230,11 @@ class MESClient:
 
 class _ServerDown(Exception):
     """5xx 응답 (내부용). 연결 실패와 똑같이 '나중에 재시도' 로 처리"""
+
+
+def safety_ok(centering: str | None, interlock: str | None) -> bool:
+    """검사 허용: 센터링 OFF(정위치) 그리고 인터락 0(정상) 일 때만. 미확인(UNKNOWN)·센서 응답 끊김은 금지"""
+    return centering == "OFF" and str(interlock) == "0"
 
 
 def _r(v: float | None) -> float | None:

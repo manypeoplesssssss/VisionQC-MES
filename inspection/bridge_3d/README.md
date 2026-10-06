@@ -9,8 +9,12 @@ cd inspection\station_3d
 .venv\Scripts\python.exe turntable_scan.py            # 스캔 → scans/<날짜_시각>/
 .venv\Scripts\python.exe merge_turntable_scans.py     # 병합 → merged_model.ply
 .venv\Scripts\python.exe measure_object.py            # 측정 → measurement.json
-.venv\Scripts\python.exe ..\bridge_3d\send_3d_to_mes.py --serial RC-0001   # MES 전송 + ../handoff/latest.json 기록
+.venv\Scripts\python.exe ..\bridge_3d\send_3d_to_mes.py --serial RC-0001 --centering OFF --interlock 0
+#                                                         ↑ MES 전송 + ../handoff/latest.json 기록
 ```
+`--centering` / `--interlock` 은 측정할 때의 장비 안전 상태입니다 (센서가 아직 없어서 작업자가 확인한 값).
+안 주면 미확인(UNKNOWN)으로 기록되어 MES 에 알람이 남고, 비전 검사가 이어받지 않습니다.
+검사 허용: **센터링 OFF(정위치) + 인터락 0(정상)**.
 그다음 환경을 바꿔 `station_vision` 의 `inspection_app.py` 에서 [검사 시작]을 누르면
 handoff 의 검사번호를 이어받아 같은 MES 검사에 PatchCore·YOLO 결과가 붙습니다.
 치수 불합격이면 비전 검사 프로그램이 검사를 시작하지 않습니다.

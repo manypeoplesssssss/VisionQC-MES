@@ -14,11 +14,11 @@ from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import AdminUser, FinalResult, ProductInspection
+from ..models import AdminUser, AlarmStatus, EquipmentSafetyAlarm, FinalResult, ProductInspection
 from ..schemas import DashboardSummary, LabelCount, ProductSummary, StageCount, TrendPoint
 from ..security import get_current_user
 from ..services.query import DEFECT_RESULTS, PENDING_RESULTS, date_range, to_summary
@@ -50,7 +50,11 @@ def summary(
     _user: AdminUser = Depends(get_current_user),
 ):
     d = d or date.today()
-    rows = _rows(db, *date_range(d, d))
+    start, end = date_range(d, d)
+    rows = _rows(db, start, end)
+    A = EquipmentSafetyAlarm
+    active_alarms = db.scalar(select(func.count()).select_from(A).where(A.alarm_status == AlarmStatus.ACTIVE))
+    alarms_today = db.scalar(select(func.count()).select_from(A).where(A.occurred_at >= start, A.occurred_at < end))
 
     by_final = {f.value: 0 for f in FinalResult}   # 0건인 결과도 나오게
     stages = {"DIMENSION": Counter(), "PATCHCORE": Counter(), "YOLO": Counter()}
@@ -80,6 +84,7 @@ def summary(
         defect_classes=[LabelCount(label=k, count=n) for k, n in classes.most_common()],  # 많은 순
         defect_codes=[LabelCount(label=k, count=n) for k, n in sorted(codes.items())],
         recent_defects=[to_summary(r) for r in rows if r.final_result in DEFECT_RESULTS][:recent],
+        active_alarms=active_alarms or 0, alarms_today=alarms_today or 0,
     )
 
 

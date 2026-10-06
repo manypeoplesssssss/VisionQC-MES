@@ -368,6 +368,17 @@ mes.complete_yolo(iid)                                   # 4) 한 바퀴 끝 →
 ```
 전체 흐름 예시는 `inspection\common\example_pipeline.py`. 턴테이블 버튼 검사 프로그램(`inspection_app.py`)은 YOLO 단계를 이 방식으로 보냅니다.
 
+장비 안전 (센터링 · 인터락): 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음.
+```python
+from mes_client import safety_ok
+if not safety_ok(centering, interlock):           # 이 PC 에서 바로 판단 (서버 응답을 기다리지 않음)
+    stop_equipment()                              # 장비 정지 → 검사 보류
+mes.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기록, 이상이면 MES 가 알람 저장
+mes.send_dimension(iid, w, l, h, centering="OFF", interlock="0")    # 치수에 측정 시점 상태 같이 기록
+```
+센서가 아직 없어서 `inspection_app.py` 는 화면의 [장비 안전 상태]에서 작업자가 고른 값을 쓰고(기본 미확인 → 시작 불가),
+3D 쪽은 `bridge_3d/send_3d_to_mes.py --centering OFF --interlock 0` 으로 넘깁니다.
+
 | 최종 결과 (자동) | 뜻 |
 |---|---|
 | `DIMENSION_PENDING` | 치수 대기·재검 (치수가 아직 안 들어옴, 하나라도 누락, 또는 재검이라 다시 스캔 필요) |
