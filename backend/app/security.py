@@ -4,8 +4,9 @@
 1) 비밀번호     : bcrypt 해시로 저장하고 비교 (원문은 어디에도 저장하지 않음)
 2) 로그인 토큰  : JWT. 로그인하면 토큰을 주고, 이후 요청은 "Authorization: Bearer <토큰>" 헤더로 확인
 3) 권한 체크    : API 함수에 Depends(...) 로 붙여서 사용
-     get_current_user     로그인한 사용자만
-     require_admin        관리자만
+     get_current_user     로그인한 사용자만 (조회)
+     require_admin        관리자·최고관리자 (불량 분류, 불량 종류 수정, 검사 삭제)
+     require_super_admin  최고관리자 (계정 관리)
      require_ingest_auth  검사 PC(API Key) 또는 로그인 사용자
 """
 import secrets
@@ -19,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import get_db
-from .models import Role, User
+from .models import AdminUser, Role
 
 # Authorization: Bearer 헤더를 읽어오는 도구. auto_error=False → 헤더가 없어도 바로 에러 내지 않고 None 을 줌
 # (/docs 화면 오른쪽 위 Authorize 버튼도 이것 덕분에 생긴다)
@@ -53,7 +54,7 @@ def _unauthorized(msg: str = "인증이 필요합니다") -> HTTPException:
 def get_current_user(
     cred: HTTPAuthorizationCredentials | None = Depends(bearer),
     db: Session = Depends(get_db),
-) -> User:
+) -> AdminUser:
     """토큰을 검사해서 로그인한 사용자를 돌려준다. 토큰이 없거나/틀리거나/만료/비활성 계정이면 401"""
     if cred is None:
         raise _unauthorized()
@@ -64,16 +65,23 @@ def get_current_user(
         raise _unauthorized("로그인이 만료되었습니다")
     except jwt.PyJWTError:
         raise _unauthorized()
-    user = db.query(User).filter(User.username == data.get("sub")).first()
+    user = db.query(AdminUser).filter(AdminUser.username == data.get("sub")).first()
     if user is None or not user.is_active:  # 토큰 발급 후 계정이 중지된 경우도 막음
         raise _unauthorized()
     return user
 
 
-def require_admin(user: User = Depends(get_current_user)) -> User:
-    """관리자만 통과. 작업자는 403"""
-    if user.role != Role.ADMIN:
+def require_admin(user: AdminUser = Depends(get_current_user)) -> AdminUser:
+    """관리자(ADMIN)·최고관리자만 통과. 조회 전용(VIEWER)은 403"""
+    if user.role not in (Role.ADMIN, Role.SUPER_ADMIN):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "관리자 권한이 필요합니다")
+    return user
+
+
+def require_super_admin(user: AdminUser = Depends(get_current_user)) -> AdminUser:
+    """최고관리자만 통과 (계정 관리)"""
+    if user.role != Role.SUPER_ADMIN:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "최고관리자 권한이 필요합니다")
     return user
 
 

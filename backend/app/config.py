@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # 프론트엔드 주소 (CORS). 브라우저가 다른 주소에서 API를 부를 때 허용할 목록. 여러 개면 쉼표로 구분
     CORS_ORIGINS: str = "http://localhost:5173"
 
+    # ---------- 3D 치수 기준 ----------
+    # 제품 모델별 기준 치수 [가로, 길이, 높이] (mm). 검사 PC 가 기준값을 안 보내면 이 값을 쓴다.
+    # 검사할 때마다 그 당시 값이 product_dimension_inspection 행에 복사되므로, 바꿔도 지난 검사는 그대로.
+    # .env 에서는 JSON 으로: PRODUCT_STANDARDS={"redcar": [40, 90, 30]}
+    # (redcar 실제 기준은 아직 미확정 → 확정되면 이 값만 바꾸면 된다)
+    PRODUCT_STANDARDS: dict[str, list[float]] = {"redcar": [40.0, 90.0, 30.0]}
+
     @property
     def cors_origin_list(self) -> list[str]:
         """'a, b' 형태의 문자열을 ['a', 'b'] 리스트로 바꿔준다"""

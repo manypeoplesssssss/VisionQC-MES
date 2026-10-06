@@ -1,0 +1,11 @@
+# 비전 검사 PC (PatchCore → YOLO, 턴테이블) 가상환경에 설치할 패키지
+# 설치: inspection\station_vision 폴더에서
+#   python -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r requirements.txt
+ultralytics>=8.3      # YOLO 모델 (torch 를 같이 설치함)
+opencv-python>=4.8    # 카메라, 사진 처리
+numpy>=1.24
+pillow>=10.0          # 버튼 화면에 영상 표시
+pyserial>=3.5         # 아두이노 턴테이블 시리얼 통신
+requests>=2.31        # MES 전송 (../common/mes_client.py)
+# PatchCore 패키지(anomalib 등)는 PatchCore 코드를 붙일 때 추가

@@ -1,7 +1,7 @@
 @echo off
 REM ============================================================
 REM  VisionQC AI MES - run all tests (Windows)
-REM  test.bat                      : backend + vision client
+REM  test.bat                      : backend + inspection client
 REM  test.bat tests\test_ingest.py : one backend test file (extra args go to pytest)
 REM ============================================================
 setlocal
@@ -28,9 +28,9 @@ set "RC1=%ERRORLEVEL%"
 popd
 
 echo.
-echo ===== vision client tests =====
-pushd vision_client
-..\backend\.venv\Scripts\python.exe -m pytest -q
+echo ===== inspection client tests =====
+pushd inspection\common
+..\..\backend\.venv\Scripts\python.exe -m pytest -q
 set "RC2=%ERRORLEVEL%"
 popd
 

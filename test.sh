@@ -15,5 +15,5 @@ fi
 echo "===== 백엔드 ====="
 (cd backend && .venv/bin/python -m pytest -q); rc1=$?
 echo "===== 검사 PC 클라이언트 ====="
-(cd vision_client && ../backend/.venv/bin/python -m pytest -q); rc2=$?
+(cd inspection/common && ../../backend/.venv/bin/python -m pytest -q); rc2=$?
 [ $rc1 -eq 0 ] && [ $rc2 -eq 0 ] && echo "전체 통과" || { echo "실패한 테스트가 있습니다"; exit 1; }

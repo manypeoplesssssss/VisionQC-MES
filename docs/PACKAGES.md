@@ -21,7 +21,7 @@
 | `backend/requirements.txt` | 백엔드 실행 | `pip install -r requirements.txt` |
 | `backend/requirements-dev.txt` | 백엔드 실행 + 테스트 | `pip install -r requirements-dev.txt` |
 | `frontend/package.json` | 프론트엔드 | `npm install` (처음 실행하면 `package-lock.json` 이 생김 → **커밋해서 팀 전체 버전 통일**) |
-| `vision_client/requirements.txt` | 검사 PC 클라이언트 | `pip install -r requirements.txt` |
+| `inspection/common/requirements.txt` | 검사 PC 클라이언트 | `pip install -r requirements.txt` |
 | `install.bat` / `install.sh` | 위 전부 + `.env` + (선택) DB | 더블클릭 / `bash install.sh` |
 
 ## 전체 한눈에 보기
@@ -42,7 +42,7 @@
 | 백엔드 | Python 3.11+ | FastAPI, SQLAlchemy, Pydantic | `backend/requirements.txt` |
 | 백엔드 테스트 | Python | pytest, httpx | `backend/requirements-dev.txt` |
 | 프론트엔드 | JavaScript (JSX) | React, react-router, Vite | `frontend/package.json` |
-| 검사 PC | Python | requests | `vision_client/requirements.txt` |
+| 검사 PC | Python | requests | `inspection/common/requirements.txt` |
 | DB | SQL | MySQL 8 | `backend/sql/schema.sql` |
 | 배포(선택) | - | Docker, nginx | `docker-compose.yml`, `*/Dockerfile` |
 
@@ -122,7 +122,7 @@
 
 ## 검사 PC 클라이언트
 
-`vision_client/mes_client.py` 를 검사 프로그램이 돌아가는 파이썬 환경에서 import 합니다.
+`inspection/common/mes_client.py` 를 검사 프로그램이 돌아가는 파이썬 환경에서 import 합니다.
 
 | 패키지 | 필수 | 하는 일 |
 |---|---|---|
@@ -130,7 +130,7 @@
 | **numpy** | `anomaly_map_to_box()` 쓸 때만 | PatchCore anomaly map 에서 결함 영역 박스 계산 (보통 PatchCore 환경에 이미 있음) |
 | ultralytics | 팀 코드 쪽 | `yolo_to_detections()` 가 ultralytics YOLO 결과(`Results`) 형식을 받음. mes_client 자체는 ultralytics 를 import 하지 않음 |
 
-설치: 검사 PC 에서 `pip install -r vision_client/requirements.txt` (개발 PC 는 `install.bat` 이 같이 설치)
+설치: 검사 PC 에서 `pip install -r inspection/common/requirements.txt` (개발 PC 는 `install.bat` 이 같이 설치)
 
 ---
 

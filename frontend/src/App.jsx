@@ -1,14 +1,13 @@
 /**
- * 화면 주소(라우트) 정의 (App.jsx)   [기능 F00 · 담당 A]
+ * 화면 주소(라우트) 정의 (App.jsx)
  *
- *   /login               로그인
- *   /                    대시보드
- *   /inspections         공정별 검사 조회
- *   /products            제품 추적 목록
- *   /products/:serial    제품 1개 이력
- *   /specs               치수 규격
- *   /account             내 계정 (비밀번호 변경)
- *   /users               사용자 관리 (관리자만)
+ *   /login                    로그인
+ *   /                         대시보드
+ *   /inspections              검사 조회 (검사 1회 = 한 줄)
+ *   /inspections/:id          검사 상세 (치수 · PatchCore · YOLO 사진 · 불량 코드 지정)
+ *   /defect-types             불량 종류 D01~D05
+ *   /account                  내 계정 (비밀번호 변경)
+ *   /users                    계정 관리 (최고관리자만)
  *
  * 로그인 화면을 뺀 나머지는 <Layout>(상단 메뉴) 안에 들어가고, 로그인해야만 보인다.
  */
@@ -18,22 +17,21 @@ import Layout from "./components/Layout.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
 import Inspections from "./pages/Inspections.jsx";
-import Products from "./pages/Products.jsx";
-import ProductHistory from "./pages/ProductHistory.jsx";
-import Specs from "./pages/Specs.jsx";
+import InspectionDetail from "./pages/InspectionDetail.jsx";
+import DefectTypes from "./pages/DefectTypes.jsx";
 import Users from "./pages/Users.jsx";
 import Account from "./pages/Account.jsx";
 
 /**
  * 로그인 확인 문지기.
- * 로그인 안 했으면 /login 으로, admin 이 필요한데 관리자가 아니면 / 로 보낸다.
+ * 로그인 안 했으면 /login 으로, 최고관리자가 필요한데 아니면 / 로 보낸다.
  * (화면만 막는 것이고, 실제 권한 검사는 백엔드가 한다)
  */
-function RequireAuth({ children, admin = false }) {
+function RequireAuth({ children, superAdmin = false }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="center muted">불러오는 중...</div>;
   if (!user) return <Navigate to="/login" replace />;
-  if (admin && user.role !== "ADMIN") return <Navigate to="/" replace />;
+  if (superAdmin && user.role !== "SUPER_ADMIN") return <Navigate to="/" replace />;
   return children;
 }
 
@@ -51,14 +49,13 @@ export default function App() {
       >
         <Route path="/" element={<Dashboard />} />
         <Route path="/inspections" element={<Inspections />} />
-        <Route path="/products" element={<Products />} />
-        <Route path="/products/:serial" element={<ProductHistory />} />
-        <Route path="/specs" element={<Specs />} />
+        <Route path="/inspections/:id" element={<InspectionDetail />} />
+        <Route path="/defect-types" element={<DefectTypes />} />
         <Route path="/account" element={<Account />} />
         <Route
           path="/users"
           element={
-            <RequireAuth admin>
+            <RequireAuth superAdmin>
               <Users />
             </RequireAuth>
           }
