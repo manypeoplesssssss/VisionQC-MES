@@ -2,7 +2,7 @@
  * 전체 스타일 (styles.css)   [기능 F00 · 담당 A, 기능별 구역은 각 담당]
  * CSS 프레임워크 없이 이 파일 하나로 관리한다. 색은 맨 위 :root 변수만 바꾸면 전체에 반영된다.
  * 순서: 변수 → 공통 → 버튼 → 로그인 → 레이아웃 → 카드/KPI → 공정흐름 → 표 → 탭/필터 → 차트
- *       → 썸네일 → 제품이력 → 모달 → 반응형(화면 폭이 좁을 때)
+ *       → 썸네일 → 검사 상세 → 모달 → 반응형(화면 폭이 좁을 때)
  */
 
 /* ---------- 색/공통 변수 ---------- */
@@ -174,19 +174,30 @@ th.num, td.num { text-align: right; }
 .thumb img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; background: #eee; }
 .thumb-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: center; padding: 8px; font-size: 13px; }
 
-/* 제품 이력 */
-.timeline { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 16px; }
-.step { position: relative; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 0; overflow: hidden; text-align: left; display: flex; flex-direction: column; justify-content: flex-start; color: inherit; }
-.step.step-ng { border-color: #f1b4b8; }
-.step img { width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; background: #eee; }
-.step-no { position: absolute; top: 8px; left: 8px; background: var(--head); color: #fff; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; }
-.step-meta { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; align-items: flex-start; }
+/* 최종 결과 6칸 (대시보드) */
+.final-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; margin-top: 12px; }
+.final-cell { display: flex; justify-content: space-between; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; color: inherit; }
+.final-cell:hover { border-color: var(--accent); text-decoration: none; }
+.final-cell .num { font-size: 18px; font-weight: 700; }
+.no-img { aspect-ratio: 4/3; display: grid; place-items: center; background: #f1f3f6; color: var(--muted); font-size: 12px; }
+
+/* 검사 상세 */
+.kv.wide { grid-template-columns: 90px 1fr; margin: 0; }
+.advice { white-space: pre-wrap; font-family: inherit; font-size: 13px; background: var(--wip-bg); border-radius: 8px; padding: 12px; margin: 0 0 8px; }
+.table.wrap td { white-space: normal; }
+textarea { font: inherit; padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); }
+/* 표시 사진 / 원본 전환 버튼 */
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+.seg button { background: #fff; border: 0; padding: 5px 10px; font-size: 13px; }
+.seg button.active { background: var(--accent); color: #fff; }
 
 /* 모달 */
 .modal-bg { position: fixed; inset: 0; background: rgba(10, 15, 25, 0.6); display: grid; place-items: center; z-index: 10; padding: 16px; }
 .modal { background: #fff; border-radius: 12px; width: min(1100px, 100%); max-height: 92vh; overflow: auto; }
 .modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .modal-body { display: grid; grid-template-columns: 1fr 320px; gap: 16px; padding: 16px; }
+.modal-body.single { grid-template-columns: 1fr; }
 .modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--line); }
 .form-modal { width: min(480px, 100%); }
 .form-body { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
@@ -207,6 +218,7 @@ th.num, td.num { text-align: right; }
 /* ---------- 반응형: 화면이 좁으면 칸 수를 줄이고 세로로 쌓는다 ---------- */
 @media (max-width: 1100px) {
   .kpis { grid-template-columns: repeat(3, 1fr); }
+  .final-grid { grid-template-columns: repeat(3, 1fr); }
 }
 @media (max-width: 900px) {
   .kpis { grid-template-columns: repeat(2, 1fr); }

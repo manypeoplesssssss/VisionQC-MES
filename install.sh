@@ -22,7 +22,7 @@ backend/.venv/bin/python -m pip install --upgrade pip
 backend/.venv/bin/python -m pip install -r backend/requirements-dev.txt
 
 echo "[3/5] 검사 PC 클라이언트 패키지 (같은 가상환경)"
-backend/.venv/bin/python -m pip install -r vision_client/requirements.txt
+backend/.venv/bin/python -m pip install -r inspection/common/requirements.txt
 
 echo "[4/5] 프론트엔드: npm install"
 (cd frontend && npm install)

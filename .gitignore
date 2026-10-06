@@ -7,3 +7,7 @@ __pycache__/
 storage/
 mes_queue/
 mes_queue_failed/
+inspection/station_vision/captures/
+inspection/handoff/*
+!inspection/handoff/.gitkeep
+*.backup_*

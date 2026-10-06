@@ -6,6 +6,7 @@ Windows 10/11 기준으로 처음부터 끝까지 따라 하면 실행되도록 
 - [1. 준비물 설치](#1-준비물-설치)
 - [2. 코드 받기](#2-코드-받기)
 - [2-1. 스크립트로 한 번에 설치 (권장)](#2-1-스크립트로-한-번에-설치-권장)
+- [2-2. 스크립트 없이 터미널로 설치 · 실행 (PowerShell)](#2-2-스크립트-없이-터미널로-설치--실행-powershell)
 - [3. MySQL 준비](#3-mysql-준비)
 - [4. 백엔드 실행](#4-백엔드-실행)
 - [5. 프론트엔드 실행](#5-프론트엔드-실행)
@@ -43,6 +44,14 @@ mysql --version
 ```
 `mysql` 명령이 없다고 나오면 Workbench 를 쓰면 되니 넘어가도 됩니다.
 
+터미널에서 바로 설치하려면 winget 을 써도 됩니다 (Windows 11 기본 포함).
+```bat
+winget install -e --id Python.Python.3.12
+winget install -e --id OpenJS.NodeJS.LTS
+winget install -e --id Oracle.MySQL
+```
+MySQL 없이 화면만 먼저 보고 싶다면 MySQL 은 건너뛰고 [3장 방법 C (SQLite)](#방법-c-mysql-없이-sqlite-로-빠르게-보기) 를 쓰면 됩니다.
+
 ---
 
 ## 2. 코드 받기
@@ -68,7 +77,7 @@ zip 으로 받았다면 원하는 곳에 압축을 풀고 그 폴더로 이동�
 |---|---|---|
 | 1 | Python 3.11+ / Node.js 설치 확인 | 1장 |
 | 2 | `backend\.venv` 가상환경 만들고 `backend\requirements-dev.txt` 설치 | 4-1, 4-3 |
-| 3 | `vision_client\requirements.txt` 설치 (같은 가상환경, 검사PC 클라이언트 테스트용) | 7-2 |
+| 3 | `inspection\common\requirements.txt` 설치 (같은 가상환경, 검사PC 클라이언트 테스트용) | 7-2 |
 | 4 | `frontend` 에서 `npm install` | 5-1 |
 | 5 | `backend\.env` 가 없으면 `.env.example` 복사 (있으면 그대로) | 4-4 |
 | 선택 | `mysql` 명령이 있으면 물어보고 → `schema.sql` 실행 + `seed.py --demo` | 3장, 4-5 |
@@ -85,6 +94,56 @@ zip 으로 받았다면 원하는 곳에 압축을 풀고 그 폴더로 이동�
 | `install.sh` `start.sh` `test.sh` | Mac/Linux 팀원용 (`bash install.sh`) |
 
 > MySQL 서버 자체는 스크립트가 설치하지 않습니다. 1장에서 설치해 두세요.
+
+---
+
+## 2-2. 스크립트 없이 터미널로 설치 · 실행 (PowerShell)
+
+bat 파일을 쓰지 않고 PowerShell 에 직접 입력하는 방법입니다. 3~6장 내용을 복사해서 바로 쓸 수 있게 모은 것이고, 각 줄의 설명은 해당 장을 보세요.
+가상환경을 켜지 않고 `.venv\Scripts\python.exe` 를 직접 부르기 때문에 PowerShell 실행 정책 오류(4-2)가 나지 않습니다.
+`C:\work\VisionQC-MES` 는 코드를 받은 폴더로 바꿔서 입력하세요.
+
+**처음 한 번**
+```powershell
+# 백엔드 패키지 (4-1, 4-3, 7-2)
+cd C:\work\VisionQC-MES\backend
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install --upgrade pip
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt -r ..\inspection\common\requirements.txt
+
+# 설정 파일 (4-4)
+Copy-Item .env.example .env
+
+# DB + 초기 데이터 (3장, 4-5) - MySQL 을 쓸 때
+Get-Content sql\schema.sql | mysql -u root -p
+.venv\Scripts\python.exe seed.py --demo
+#   MySQL 없이 SQLite 로 할 때는 위 두 줄 대신 3장 방법 C
+
+# 프론트엔드 패키지 (5-1)
+cd ..\frontend
+npm install
+```
+
+**실행할 때마다** (PowerShell 창 2개)
+```powershell
+# 창 1 - 백엔드 :8000
+cd C:\work\VisionQC-MES\backend
+# SQLite 로 할 때만: $env:DATABASE_URL = "sqlite:///./storage/dev.db"
+.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+
+# 창 2 - 프론트엔드 :5173
+cd C:\work\VisionQC-MES\frontend
+npm run dev
+```
+http://localhost:5173 에서 `admin` / `admin1234` 로 로그인합니다. 끌 때는 각 창에서 `Ctrl + C`.
+
+**테스트** (6장, MySQL 필요 없음)
+```powershell
+cd C:\work\VisionQC-MES\backend
+.venv\Scripts\python.exe -m pytest -q
+cd ..\inspection\common
+..\..\backend\.venv\Scripts\python.exe -m pytest -q
+```
 
 ---
 
@@ -107,6 +166,20 @@ mysql -u root -p < backend\sql\schema.sql
 mysql -u mes_user -pmes_pass -e "SHOW DATABASES;"
 ```
 목록에 `visionqc_mes` 가 보이면 성공입니다.
+
+### 방법 C. MySQL 없이 SQLite 로 빠르게 보기
+MySQL 을 설치하지 않고 파일 하나짜리 DB 로 화면을 확인하는 방법입니다 (개발·시연용). 코드나 `.env` 는 고치지 않고 **그 터미널에서만** 환경변수 `DATABASE_URL` 을 바꿉니다. 환경변수가 `.env` 보다 우선합니다.
+```powershell
+cd backend
+New-Item -ItemType Directory -Force storage | Out-Null
+$env:DATABASE_URL = "sqlite:///./storage/dev.db"
+.venv\Scripts\python.exe seed.py --demo
+```
+cmd 라면 `mkdir storage` 와 `set DATABASE_URL=sqlite:///./storage/dev.db`.
+
+- DB 파일은 `backend\storage\dev.db` 에 생기고 Git 에 올라가지 않습니다 (`storage/` 는 `.gitignore` 에 있음).
+- **백엔드를 띄우는 창에서도 같은 `DATABASE_URL` 줄을 먼저 입력**해야 합니다. 창을 새로 열면 사라집니다.
+- 계속 SQLite 로 쓸 거라면 `.env` 의 `DATABASE_URL` 을 위 값으로 바꿔도 됩니다.
 
 > 계정 이름이나 비밀번호를 바꾸고 싶으면 `schema.sql` 위쪽의 `mes_user` / `mes_pass` 를 바꾸고, 4장의 `.env` 에도 똑같이 적어야 합니다.
 
@@ -167,8 +240,8 @@ python seed.py --demo
 ```
 | 명령 | 하는 일 |
 |---|---|
-| `python seed.py` | 계정 2개(`admin`/`admin1234` 관리자, `operator`/`oper1234` 작업자) + 품목 규격 3개(Redcar, Bluecar, Greencar) |
-| `python seed.py --demo` | 위 + 최근 7일 더미 검사 데이터와 이미지 (화면 확인용) |
+| `python seed.py` | 계정 3개(`admin`/`admin1234` 최고관리자, `manager`/`manager1234` 관리자, `viewer`/`viewer1234` 조회 전용) + 불량 종류 D01~D05 |
+| `python seed.py --demo` | 위 + 최근 7일 더미 검사 데이터와 사진 (3D 치수 → PatchCore → YOLO 흐름, 화면 확인용) |
 | `python seed.py --reset --demo` | **모든 테이블과 이미지를 지우고** 다시 생성. 되돌릴 수 없음 |
 
 여러 번 실행해도 이미 있는 데이터는 다시 만들지 않습니다. 실제 라인 데이터만 쌓고 싶으면 `--demo` 없이 실행하세요.
@@ -246,9 +319,9 @@ pytest tests/test_ingest.py::test_retest_gets_suffix -v   :: 테스트 하나
 ```
 어떤 파일이 어떤 기능인지는 [FEATURES.md 8장](FEATURES.md#8-테스트-파일--기능-대응표).
 
-검사 PC 클라이언트(`vision_client`) 테스트는 MES 서버 없이 가짜 서버로 돕니다.
+검사 PC 클라이언트(`inspection/common`) 테스트는 MES 서버 없이 가짜 서버로 돕니다.
 ```bat
-cd vision_client
+cd inspection\common
 pip install requests pytest numpy
 pytest -v
 ```
@@ -259,46 +332,63 @@ pytest -v
 
 검사 프로그램(3D 치수 / PatchCore / YOLO)이 결과를 MES 로 보내는 방법입니다.
 
-### 7-1. 검사 PC 에 파일 복사
-`vision_client\mes_client.py` 를 검사 프로그램 폴더로 복사합니다.
+### 7-1. 검사 PC 에 폴더 복사
+저장소의 `inspection\` 폴더를 검사 PC 로 복사합니다 (MES 서버·화면 폴더는 필요 없음). 구성은 [inspection/README.md](../inspection/README.md).
+- `common\` : MES 전송 모듈 `mes_client.py` (두 검사 프로그램이 같이 씀)
+- `station_3d\` : 3D 치수 검사 (3D 환경)
+- `station_vision\` : PatchCore → YOLO 검사, 턴테이블 버튼 화면 (비전 환경)
 
-### 7-2. 패키지 설치 (검사 PC 의 파이썬 환경에서)
-`vision_client\requirements.txt` 도 같이 복사해서
+### 7-2. 패키지 설치 (검사 프로그램 폴더마다 가상환경 따로)
+3D 와 PatchCore·YOLO 는 환경이 달라서 가상환경을 폴더마다 따로 만듭니다.
 ```bat
-pip install -r requirements.txt
+cd inspection\station_vision
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-필수는 `requests` 하나이고, `numpy` 는 `anomaly_map_to_box()` 를 쓸 때만, `pytest` 는 테스트할 때만 필요합니다.
+MES 전송에 필요한 것은 `requests` 하나이고, 각 프로그램의 `requirements.txt` 에 들어 있습니다.
 
 ### 7-3. 코드에 붙이기
+MES 는 **검사 1회 = `product_inspection` 한 행**입니다. 같은 검사번호(`inspection_id`)로 단계별 결과를 채워 넣으면, 최종 결과는 서버 DB 가 자동으로 계산합니다.
 ```python
-from mes_client import MESClient, yolo_to_detections, patchcore_to_detections, anomaly_map_to_box
+from mes_client import MESClient, yolo_to_defects
 
 mes = MESClient("http://<MES서버IP>:8000", api_key="<.env 의 INGEST_API_KEY>", model_version="v1.0")
+iid = "20261006_inspection_143000_001"                 # 검사번호 (날짜 포함 권장)
 
-# 3D 치수
-mes.send_dimension("SN0001", "Redcar", "scan.png", width=40.1, length=90.0, height=30.0)
+mes.start(iid, "redcar", product_serial="RC-0001")      # 0) 검사 시작
+mes.send_dimension(iid, 40.1, 90.0, 30.2)                # 1) 3D 치수 (기준 치수는 서버 설정, standards=(가로,길이,높이) 로 직접 줘도 됨)
+mes.send_patchcore(iid, score=0.82, threshold=0.6)       # 2) PatchCore (점수 >= 기준 → 불합격)
 
-# PatchCore
-mes.send_defects("SN0001", "Redcar", "PATCHCORE", "pc.png",
-                 patchcore_to_detections(score, threshold=0.5, box=anomaly_map_to_box(amap, 0.5)))
-
-# YOLO (ultralytics)
-result = model("img.png")[0]
-mes.send_defects("SN0001", "Redcar", "YOLO", "img.png", yolo_to_detections(result, conf_min=0.5))
+# 3) YOLO: 결함 사진 1장마다 (원본 + 표시 사진 + 결함 목록)
+result = model("c001.jpg")[0]
+mes.send_yolo_capture(iid, 1, "c001.jpg", "c001_annotated.jpg",
+                      defects=yolo_to_defects(result, conf_min=0.8), angle_deg=95.0)
+mes.complete_yolo(iid)                                   # 4) 한 바퀴 끝 → YOLO 분류 완료
 ```
-전체 흐름 예시는 `vision_client\example_pipeline.py`.
+전체 흐름 예시는 `inspection\common\example_pipeline.py`. 턴테이블 버튼 검사 프로그램(`inspection_app.py`)은 YOLO 단계를 이 방식으로 보냅니다.
+
+| 최종 결과 (자동) | 뜻 |
+|---|---|
+| `DIMENSION_PENDING` | 치수 검사 대기 (치수가 아직 안 들어옴, 또는 하나라도 누락) |
+| `DIMENSION_DEFECT` | 치수 불합격 (±3mm 초과) |
+| `PATCHCORE_PENDING` | 치수 합격, PatchCore 대기 |
+| `NORMAL` | 치수와 PatchCore 모두 합격 |
+| `YOLO_PENDING` | PatchCore 불합격, YOLO 분류 대기 (사진이 들어오는 중이어도 완료 전이면 여기) |
+| `PROCESS_DEFECT` | PatchCore 불합격, YOLO 분류 완료 |
 
 ### 7-4. 지켜야 할 값 규칙
 | 값 | 규칙 | 예 |
 |---|---|---|
-| 시리얼 `serial_no` | 영문/숫자/`_`/`-`, 50자 이하. **같은 제품은 3공정 모두 같은 시리얼** | `SN2610050001` |
-| 품목 `item` | 영문/숫자/`_` 만 (파일명에 들어감) | `Redcar` |
-| 이미지 | `.jpg` `.jpeg` `.png` `.bmp`, 20MB 이하 | |
-| 결함 박스 `box` | `[x1, y1, x2, y2]`, **원본 이미지 픽셀 기준** | `[120, 80, 180, 130]` |
+| 검사번호 `inspection_id` | 영문/숫자/`_`/`-`, 64자 이하. **날짜를 넣어** 다른 날 검사와 겹치지 않게 | `20261006_inspection_143000_001` |
+| 제품 모델명 `product_name` | 영문/숫자/`_` 만 (파일명에 들어감) | `redcar` |
+| 제품번호 `product_serial` | 영문/숫자/`_`/`-` (선택) | `RC-0001` |
+| 사진 | `.jpg` `.jpeg` `.png` `.bmp`, 20MB 이하 | |
+| 결함 박스 `box` | `[x1, y1, x2, y2]`, **원본 사진 픽셀 기준** | `[120, 80, 180, 130]` |
 | 신뢰도 `confidence` | 0 ~ 1 | `0.91` |
+| 기준 치수 | 서버 `.env` 의 `PRODUCT_STANDARDS={"redcar": [가로, 길이, 높이]}` (redcar 실제 값은 확정 후 입력) | `[40, 90, 30]` |
 
 ### 7-5. 서버가 꺼져 있을 때
-`mes_queue\` 폴더에 결과가 쌓이고, 다음 전송 때 오래된 것부터 자동으로 다시 보냅니다. 검사 시각은 처음 검사한 시각 그대로 들어갑니다. 서버가 형식 오류로 거부한 건은 `mes_queue_failed\` 로 옮겨지니 가끔 확인하세요.
+`mes_queue\` 폴더에 요청(사진 복사본 포함)이 쌓이고, 다음 전송 때 보낸 순서 그대로 자동으로 다시 보냅니다. 시각 값은 처음 그대로 들어갑니다. 서버가 형식 오류로 거부한 건은 `mes_queue_failed\` 로 옮겨지니 가끔 확인하세요.
 
 ---
 
@@ -372,6 +462,7 @@ uvicorn app.main:app --reload --port 8000
 cd C:\work\VisionQC-MES\frontend
 npm run dev
 ```
+PowerShell 이나 SQLite 로 할 때는 [2-2](#2-2-스크립트-없이-터미널로-설치--실행-powershell) 의 "실행할 때마다" 를 쓰세요.
 
 팀원 코드를 받은 뒤에는
 ```bat
@@ -393,14 +484,15 @@ install.bat
 | `Access denied for user 'mes_user'` (1045) | 계정/비밀번호 불일치 | `schema.sql` 다시 실행, `.env` 의 `DATABASE_URL` 확인 |
 | `Unknown database 'visionqc_mes'` (1049) | DB 를 안 만듦 | 3장 다시 |
 | `'cryptography' package is required for ... caching_sha2_password` | MySQL 8 인증 방식 | `pip install cryptography` (requirements 에 포함) |
-| `Unknown column 'users.role'` 등 컬럼 없음 | 예전(뼈대) 버전으로 만든 테이블 | `python seed.py --reset --demo` (데이터 삭제됨) |
+| `Unknown column ...` / `no such table: product_inspection` | 예전 구조(테이블 4개로 바뀌기 전)로 만든 DB | `python seed.py --reset --demo` (데이터 삭제됨) |
 | `[Errno 10048] ... only one usage of each socket address` | 8000 포트 사용 중 | `netstat -ano \| findstr :8000` 로 PID 확인 후 종료, 또는 `--port 8001` (이 경우 `vite.config.js` proxy 도 8001 로) |
 | 화면에서 `요청 실패 (500)`, Vite 창에 `http proxy error ... ECONNREFUSED` | 백엔드가 안 켜져 있음 | 4-6 실행 |
 | 로그인하자마자 다시 로그인 화면 | 토큰 만료 / `JWT_SECRET` 변경 | 다시 로그인 |
 | 이미지가 회색 "불러올 수 없습니다" | 파일이 없음 / `STORAGE_DIR` 경로 변경 / 오래 띄워둔 화면 | `STORAGE_DIR` 확인, 새로고침 |
 | 검사 PC 전송이 `401` | API Key 불일치 | 서버 `.env` 의 `INGEST_API_KEY` 와 `MESClient(api_key=...)` 맞추기 |
-| 검사 PC 전송이 `422` | payload 형식 오류 (품목명에 `-`, 공정과 데이터 불일치 등) | 응답 메시지 확인, 7-4 규칙 확인 |
-| 검사 PC 전송이 `MESError 422 ... dimension.status` | 서버에 그 품목 규격이 없음 | 화면 [치수 규격]에서 규격 등록, 또는 `status` 를 같이 보내기 |
+| 검사 PC 전송이 `422` | 형식 오류 (제품 모델명에 `-`, 검사번호에 `.` 등) | 응답 메시지 확인, 7-4 규칙 확인 |
+| 3D 치수 결과가 계속 `대기` | 기준 치수가 없음 (`PRODUCT_STANDARDS` 에 그 제품이 없음) | `.env` 의 `PRODUCT_STANDARDS` 에 추가, 또는 `send_dimension(..., standards=(가로, 길이, 높이))` |
+| 검사 PC 전송이 `404 검사가 없습니다` | `start()` 없이 단계 결과만 보냄 | 먼저 `mes.start(검사번호, 제품명)` 호출 |
 | 다른 PC 에서 접속 안 됨 | `--host` 옵션 없음 / 방화벽 | 8장 |
 | 검사 시각이 9시간 어긋남 | 서버 PC 시간대 설정 | Windows 시간대를 서울로, 검사 PC 는 `MESClient` 가 시간대 포함해서 보냄 |
 | `npm install` 이 매우 느리거나 실패 | 네트워크 / 캐시 | `npm cache clean --force` 후 재시도 |

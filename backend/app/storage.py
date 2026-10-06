@@ -1,9 +1,9 @@
 """
 이미지 로컬 저장 + 파일명 규칙 + 서명된 이미지 주소 (storage.py)   [기능 F06 저장=B · F13 서명 주소=D]
 
-파일명 : yyyy-mm-dd-품목-공정-시리얼.확장자
-         예) 2026-10-05-Redcar-DIM3D-SN0001.jpg
-         같은 제품을 같은 공정에서 재검사하면 뒤에 _r2, _r3 ... 이 붙음 (덮어쓰기 없음)
+파일명 : yyyy-mm-dd-품목-HHMMSS-공정-시리얼.확장자   (일자-품목-검사시각-공정-시리얼)
+         예) 2026-10-05-Redcar-143005-DIM3D-SN0001.jpg
+         같은 제품·공정을 같은 초에 또 저장하면 뒤에 _r2, _r3 ... 이 붙음 (덮어쓰기 없음)
 저장경로: STORAGE_DIR/yyyy-mm-dd/파일명
 DB에는 image_filename(파일명)과 image_path(STORAGE_DIR 기준 상대경로)를 같이 기록
 
@@ -39,12 +39,11 @@ def build_filename(inspected_at: datetime, item: str, process: str,
     """
     serial = _SAFE.sub("_", serial_no)  # 파일명 구분자 '-' 와 섞이지 않게
     suffix = "" if retry == 1 else f"_r{retry}"
-    return f"{inspected_at:%Y-%m-%d}-{item}-{process}-{serial}{suffix}{ext}"
+    return f"{inspected_at:%Y-%m-%d}-{item}-{inspected_at:%H%M%S}-{process}-{serial}{suffix}{ext}"
 
 
-def save_image(file: UploadFile, inspected_at: datetime, item: str,
-               process: str, serial_no: str) -> tuple[str, str]:
-    """이미지를 저장하고 (파일명, 상대경로) 를 돌려준다"""
+def read_image(file: UploadFile) -> tuple[bytes, str]:
+    """업로드 이미지 검사(확장자·크기) 후 (내용, 확장자)"""
     # 1) 확장자 확인
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXT:
@@ -57,7 +56,19 @@ def save_image(file: UploadFile, inspected_at: datetime, item: str,
         raise HTTPException(413, f"이미지가 너무 큽니다 (최대 {settings.MAX_IMAGE_MB}MB)")
     if not data:
         raise HTTPException(400, "빈 이미지 파일입니다")
+    return data, ext
 
+
+def save_image(file: UploadFile, inspected_at: datetime, item: str,
+               process: str, serial_no: str) -> tuple[str, str]:
+    """업로드 이미지를 검사해서 저장하고 (파일명, 상대경로) 를 돌려준다"""
+    data, ext = read_image(file)
+    return save_bytes(data, ext, inspected_at, item, process, serial_no)
+
+
+def save_bytes(data: bytes, ext: str, inspected_at: datetime, item: str,
+               process: str, serial_no: str) -> tuple[str, str]:
+    """파일 내용을 규칙대로 이름 붙여 저장하고 (파일명, 상대경로) 를 돌려준다"""
     # 3) 날짜 폴더 준비
     day = f"{inspected_at:%Y-%m-%d}"
     day_dir = settings.STORAGE_DIR / day

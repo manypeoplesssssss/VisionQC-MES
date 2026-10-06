@@ -1,6 +1,14 @@
--- VisionQC AI MES - MySQL 8.x 스키마
--- 서버를 처음 실행하면 테이블은 자동 생성되므로, 여기서는 DB와 계정만 만들어도 된다.
--- (테이블 정의는 구조 확인/발표 자료용으로 같이 둠)
+-- VisionQC AI MES - MySQL 8.0.16 이상 스키마 (테이블 4개, 검사 1회 단위)
+-- 서버(backend)를 처음 실행하면 테이블은 자동 생성되므로, 여기서는 DB와 계정만 만들어도 된다.
+-- 이 파일의 테이블 정의는 backend/app/models.py 와 같은 구조 (구조 확인 / Workbench 에서 직접 만들 때용)
+--
+-- 관계
+--   product_inspection.inspection_id ─ 1 : 0..1 ─ product_dimension_inspection.inspection_id   (실제 외래키)
+--   product_inspection.yolo_defect_data[*].defect_code ··· defect_type.defect_code            (JSON 안 논리 참조, 외래키 없음)
+--   admin_user ··· 검사 결과 조회 · 리포트 수신                                                  (논리 참조)
+--
+-- [자동] 컬럼 = GENERATED ALWAYS AS (...) STORED. 애플리케이션이 값을 넣지 않고 MySQL 이 계산한다.
+-- 결과값 컬럼의 허용값은 CHECK 로 제한 (MySQL 8.0.16 부터 CHECK 가 실제로 검사됨)
 
 CREATE DATABASE IF NOT EXISTS visionqc_mes DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS 'mes_user'@'%' IDENTIFIED BY 'mes_pass';
@@ -9,65 +17,125 @@ FLUSH PRIVILEGES;
 
 USE visionqc_mes;
 
-CREATE TABLE IF NOT EXISTS users (
-    id            INT AUTO_INCREMENT PRIMARY KEY,
-    username      VARCHAR(50)  NOT NULL UNIQUE,
-    password_hash VARCHAR(100) NOT NULL,
-    name          VARCHAR(50)  NOT NULL,
-    role          ENUM('ADMIN','OPERATOR') NOT NULL DEFAULT 'OPERATOR',
-    is_active     BOOLEAN      NOT NULL DEFAULT TRUE,
-    created_at    DATETIME     DEFAULT CURRENT_TIMESTAMP
+-- ---------------------------------------------------------------------------
+-- 전체 검사: 제품 한 개의 검사 1회 = 한 행 (같은 제품을 재검사하면 새 inspection_id)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS product_inspection (
+    id                      INT AUTO_INCREMENT PRIMARY KEY,                    -- 검사 행 식별번호
+    inspection_id           VARCHAR(64)  NOT NULL UNIQUE,                       -- 검사 고유번호 (날짜 포함, 예: 20261006_inspection_143000_001)
+    product_name            VARCHAR(50)  NOT NULL,                              -- 제품 모델명 (redcar)
+    product_serial          VARCHAR(64)  NULL,                                  -- 개별 제품 식별번호
+    dimension_result        VARCHAR(16)  NOT NULL DEFAULT 'PENDING',            -- 3D 치수 합불 판정 (치수 테이블 결과를 서버가 반영)
+    dimension_data          JSON         NULL,                                  -- 치수 상세 데이터
+    scan_file_path          VARCHAR(500) NULL,                                  -- 3D 스캔 파일 경로
+    patchcore_result        VARCHAR(16)  NOT NULL DEFAULT 'PENDING',            -- PatchCore 합불 판정 (점수 >= 기준이면 FAIL)
+    patchcore_score         DOUBLE       NULL,                                  -- 이상 점수
+    patchcore_threshold     DOUBLE       NULL,                                  -- 검사 당시 판정 기준
+    patchcore_model_version VARCHAR(50)  NULL,                                  -- PatchCore 모델 버전
+    yolo_status             VARCHAR(16)  NOT NULL DEFAULT 'NOT_STARTED',        -- YOLO 검사 진행 상태
+    yolo_defect_data        JSON         NOT NULL,                              -- 불량별 검출 정보 배열 [{capture_number, defect_class, confidence, box, angle_deg, defect_code}]
+    yolo_model_version      VARCHAR(50)  NULL,                                  -- YOLO 모델 버전
+    capture_folder          VARCHAR(500) NULL,                                  -- 검사 사진 폴더 경로 (검사 PC)
+    image_files             JSON         NOT NULL,                              -- 이미지별 파일 경로 배열 [{capture_number, original_path, annotated_path, metadata_path}]
+    final_result            VARCHAR(32)  GENERATED ALWAYS AS (                  -- [자동] 최종 검사 결과
+        CASE
+            WHEN dimension_result IS NULL OR dimension_result = 'PENDING' THEN 'DIMENSION_PENDING'
+            WHEN dimension_result = 'FAIL' THEN 'DIMENSION_DEFECT'
+            WHEN patchcore_result IS NULL OR patchcore_result = 'PENDING' THEN 'PATCHCORE_PENDING'
+            WHEN patchcore_result = 'PASS' THEN 'NORMAL'
+            WHEN yolo_status = 'COMPLETED' THEN 'PROCESS_DEFECT'
+            ELSE 'YOLO_PENDING'
+        END) STORED NOT NULL,
+    recommended_action      TEXT         NULL,                                  -- 원인 후보 및 권장 조치 (지정된 불량 코드에서 모음)
+    report_path             VARCHAR(500) NULL,                                  -- 생성한 리포트 파일 경로
+    report_sent_at          DATETIME     NULL,                                  -- 리포트 발송 성공 시각
+    created_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,    -- 검사 행 생성 시각 (검사 시작 시각)
+    updated_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT ck_pi_dimension_result CHECK (dimension_result IN ('PENDING','PASS','FAIL')),
+    CONSTRAINT ck_pi_patchcore_result CHECK (patchcore_result IN ('PENDING','PASS','FAIL')),
+    CONSTRAINT ck_pi_yolo_status      CHECK (yolo_status IN ('NOT_STARTED','IN_PROGRESS','COMPLETED')),
+    INDEX ix_pi_product_created (product_name, created_at),
+    INDEX ix_product_inspection_product_serial (product_serial),
+    INDEX ix_product_inspection_final_result (final_result),
+    INDEX ix_product_inspection_created_at (created_at)
 );
 
--- 품목별 치수 규격 (기준값 ± 공차)
-CREATE TABLE IF NOT EXISTS item_specs (
-    id             INT AUTO_INCREMENT PRIMARY KEY,
-    item           VARCHAR(50) NOT NULL UNIQUE,
-    width_nominal  FLOAT NOT NULL, width_tol  FLOAT NOT NULL,
-    length_nominal FLOAT NOT NULL, length_tol FLOAT NOT NULL,
-    height_nominal FLOAT NOT NULL, height_tol FLOAT NOT NULL,
-    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+-- ---------------------------------------------------------------------------
+-- 3D 치수: 전체 검사 1회당 0~1행. 기준 치수는 검사 당시 값으로 보관. 허용오차 ±3mm (정확히 3mm 는 합격)
+-- 종합: 하나라도 초과 → FAIL, (초과 없이) 하나라도 누락 → PENDING, 나머지 PASS
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS product_dimension_inspection (
+    id                 INT AUTO_INCREMENT PRIMARY KEY,                         -- 치수 검사 행 식별번호
+    inspection_id      VARCHAR(64) NOT NULL UNIQUE,                            -- 전체 검사와 연결하는 검사번호
+    width_mm           DOUBLE NULL,                                            -- 실측 가로 (mm)
+    length_mm          DOUBLE NULL,                                            -- 실측 길이 (mm)
+    height_mm          DOUBLE NULL,                                            -- 실측 높이 (mm)
+    standard_width_mm  DOUBLE NULL,                                            -- 기준 가로 (mm)
+    standard_length_mm DOUBLE NULL,                                            -- 기준 길이 (mm)
+    standard_height_mm DOUBLE NULL,                                            -- 기준 높이 (mm)
+    width_result       VARCHAR(16) GENERATED ALWAYS AS (CASE WHEN width_mm IS NULL OR standard_width_mm IS NULL THEN 'PENDING' WHEN ABS(width_mm - standard_width_mm) <= 3.000001 THEN 'PASS' ELSE 'FAIL' END) STORED NOT NULL,     -- [자동] 가로 합불
+    length_result      VARCHAR(16) GENERATED ALWAYS AS (CASE WHEN length_mm IS NULL OR standard_length_mm IS NULL THEN 'PENDING' WHEN ABS(length_mm - standard_length_mm) <= 3.000001 THEN 'PASS' ELSE 'FAIL' END) STORED NOT NULL, -- [자동] 길이 합불
+    height_result      VARCHAR(16) GENERATED ALWAYS AS (CASE WHEN height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING' WHEN ABS(height_mm - standard_height_mm) <= 3.000001 THEN 'PASS' ELSE 'FAIL' END) STORED NOT NULL, -- [자동] 높이 합불
+    dimension_result   VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 세 치수 종합 합불
+        CASE
+            WHEN (width_mm IS NOT NULL AND standard_width_mm IS NOT NULL AND ABS(width_mm - standard_width_mm) > 3.000001)
+              OR (length_mm IS NOT NULL AND standard_length_mm IS NOT NULL AND ABS(length_mm - standard_length_mm) > 3.000001)
+              OR (height_mm IS NOT NULL AND standard_height_mm IS NOT NULL AND ABS(height_mm - standard_height_mm) > 3.000001) THEN 'FAIL'
+            WHEN width_mm IS NULL OR standard_width_mm IS NULL
+              OR length_mm IS NULL OR standard_length_mm IS NULL
+              OR height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING'
+            ELSE 'PASS'
+        END) STORED NOT NULL,
+    scan_file_path     VARCHAR(500) NULL,                                      -- 3D 스캔 원본 경로
+    created_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_pdi_inspection FOREIGN KEY (inspection_id)
+        REFERENCES product_inspection (inspection_id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
--- 검사 1건 = 이미지 1장. inspected_at 이 시계열 기준
-CREATE TABLE IF NOT EXISTS inspections (
-    id             INT AUTO_INCREMENT PRIMARY KEY,
-    serial_no      VARCHAR(50)  NOT NULL,                          -- 제품 개체 ID (공정 간 추적 키)
-    item           VARCHAR(50)  NOT NULL,                          -- Redcar / Bluecar / Greencar ...
-    process        ENUM('DIM3D','PATCHCORE','YOLO') NOT NULL,      -- 3D치수 / 1차 PatchCore / 2차 YOLO
-    inspected_at   DATETIME     NOT NULL,
-    result         ENUM('OK','NG') NOT NULL,
-    model_version  VARCHAR(50)  NULL,                              -- 사용한 AI 모델 버전
-    image_filename VARCHAR(255) NOT NULL UNIQUE,                   -- 2026-10-05-Redcar-DIM3D-SN0001.jpg
-    image_path     VARCHAR(500) NOT NULL,                          -- 2026-10-05/2026-10-05-Redcar-...
-    created_at     DATETIME     DEFAULT CURRENT_TIMESTAMP,
-    INDEX ix_inspections_serial_no (serial_no),
-    INDEX ix_insp_time         (inspected_at),
-    INDEX ix_insp_process_time (process, inspected_at),
-    INDEX ix_insp_item_time    (item, inspected_at),
-    INDEX ix_insp_result_time  (result, inspected_at)
+-- ---------------------------------------------------------------------------
+-- 불량 종류: 5가지 공정 케이스 · 원인 후보 (원인은 확정 원인과 구분하여 '후보'로 관리)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS defect_type (
+    defect_code        VARCHAR(10)  PRIMARY KEY,                               -- 불량 코드 (D01~D05)
+    defect_name        VARCHAR(100) NOT NULL,                                  -- 불량 이름
+    defect_category    VARCHAR(50)  NOT NULL,                                  -- 도장 부족 / 스크래치
+    defect_location    VARCHAR(100) NULL,                                      -- 불량 발생 위치
+    description        TEXT         NULL,                                      -- 불량 상세 설명
+    cause_candidates   JSON         NOT NULL,                                  -- 원인 후보 배열
+    recommended_action TEXT         NULL,                                      -- 권장 점검 및 조치
+    is_active          BOOLEAN      NOT NULL DEFAULT TRUE,                     -- 불량 분류 사용 여부
+    created_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- 3D 모델링 치수검사 결과 (검사 1 : 1)
-CREATE TABLE IF NOT EXISTS dimension_results (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    inspection_id   INT NOT NULL UNIQUE,
-    width_mm        FLOAT NOT NULL,
-    length_mm       FLOAT NOT NULL,
-    height_mm       FLOAT NOT NULL,
-    status          ENUM('OK','NG') NOT NULL,                     -- 최종 판정 (규격 있으면 서버 판정)
-    reported_status ENUM('OK','NG') NULL,                         -- 검사 PC가 보낸 판정
-    FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE CASCADE
-);
+INSERT IGNORE INTO defect_type (defect_code, defect_name, defect_category, defect_location, description, cause_candidates, recommended_action) VALUES
+('D01', '측면 도장 부족', '도장 부족', '측면', '제품 측면의 도장이 부족함',
+ JSON_ARRAY('페인트 공급 부족', '노즐 막힘', '분사 위치 오류'), '페인트 공급 상태, 노즐, 측면 분사 위치 확인'),
+('D02', '정면 도장 부족', '도장 부족', '정면', '제품 정면의 도장이 부족함',
+ JSON_ARRAY('페인트 공급 부족', '노즐 막힘', '분사 위치 오류'), '페인트 공급 상태, 노즐, 정면 분사 위치 확인'),
+('D03', '상단(천장) 도장 부족', '도장 부족', '상단', '제품 상단(천장)의 도장이 부족함',
+ JSON_ARRAY('페인트 공급 부족', '노즐 막힘', '분사 위치 오류'), '페인트 공급 상태, 노즐, 상단 분사 위치 확인'),
+('D04', '지그 조립 불완전으로 인한 스크래치', '스크래치', '지그 접촉부', '지그 부품이 덜 조립되어 작동 중 제품과 접촉',
+ JSON_ARRAY('지그 부품 조립 불완전'), '지그 조립·고정 상태와 작동 중 제품 접촉 확인'),
+('D05', '턴테이블 안착 중 발생한 스크래치', '스크래치', '하단·턴테이블 접촉부', '턴테이블에 올리는 과정에서 접촉',
+ JSON_ARRAY('안착 과정에서 발생한 접촉'), '제품 안착 과정과 턴테이블 접촉 부위 확인');
 
--- PatchCore / YOLO 결함 결과 (검사 1 : N, 박스마다 1행)
-CREATE TABLE IF NOT EXISTS defect_results (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    inspection_id   INT NOT NULL,
-    defect_detected BOOLEAN NOT NULL,
-    type            VARCHAR(50) NULL,
-    confidence      FLOAT NULL,
-    box             JSON NULL,                                    -- [x1, y1, x2, y2] (px)
-    INDEX ix_defect_results_inspection_id (inspection_id),
-    FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE CASCADE
+-- ---------------------------------------------------------------------------
+-- 관리자: 계정 · 권한 · 리포트 수신 설정. 비밀번호는 평문 저장 금지 (애플리케이션이 bcrypt 해시 생성)
+-- 계정은 backend 폴더에서 python seed.py 로 만든다 (admin / admin1234 최고관리자 등)
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS admin_user (
+    id                     INT AUTO_INCREMENT PRIMARY KEY,                     -- 관리자 식별번호
+    username               VARCHAR(50)  NOT NULL UNIQUE,                       -- 로그인 아이디
+    password_hash          VARCHAR(100) NOT NULL,                              -- 비밀번호 해시값
+    name                   VARCHAR(50)  NOT NULL,                              -- 관리자 이름
+    email                  VARCHAR(255) NULL UNIQUE,                           -- 이메일 및 리포트 수신 주소
+    role                   VARCHAR(16)  NOT NULL DEFAULT 'VIEWER',             -- 최고관리자 / 관리자 / 조회 전용
+    is_active              BOOLEAN      NOT NULL DEFAULT TRUE,                 -- 계정 활성 여부
+    receive_defect_reports BOOLEAN      NOT NULL DEFAULT FALSE,                -- 불량 리포트 수신 여부
+    last_login_at          DATETIME     NULL,                                  -- 마지막 로그인 성공 시각
+    created_at             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at             DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT ck_admin_role CHECK (role IN ('SUPER_ADMIN','ADMIN','VIEWER'))
 );

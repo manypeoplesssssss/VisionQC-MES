@@ -1,29 +1,45 @@
 """
-메인 페이지(대시보드)용 API (routers/dashboard.py)   [기능 F10·F11 · 담당 C]
+메인 페이지(대시보드)용 API (routers/dashboard.py)
 
-GET /api/dashboard/summary?date=YYYY-MM-DD      제품 수·양품·불량·불량률, 공정별/품목별, 불량 유형, 최근 불량
+GET /api/dashboard/summary?date=YYYY-MM-DD      그날 검사 수·정상·불량·대기·불량률, 최종 결과별, 단계별,
+                                                 제품 모델별, YOLO 결함 종류, 불량 코드, 최근 불량
 GET /api/dashboard/hourly?date=YYYY-MM-DD       시간대별 검사·불량 수 (하루)
-GET /api/dashboard/daily?date_from=&date_to=    일별 제품·불량 수 (기간, 기본 최근 14일)
+GET /api/dashboard/daily?date_from=&date_to=    일별 검사·불량 수 (기간, 기본 최근 14일)
 
-두 가지 단위를 섞어 쓰니 주의:
-  - 제품 단위  : 제품 수, 양품/불량/진행중, 불량률, 품목별, 일별   (services/products.py 로 시리얼별 집계)
-  - 검사 단위  : 공정별 건수, 시간대별, 불량 유형, 최근 불량        (inspections 행 그대로 셈)
+검사 1회 = product_inspection 1행. 시각은 created_at(검사 시작 시각) 기준.
+불량 = 치수 불합격(DIMENSION_DEFECT) + PatchCore 불합격(YOLO_PENDING, PROCESS_DEFECT)
+대기 = DIMENSION_PENDING + PATCHCORE_PENDING
 """
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, timedelta
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import case, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import DefectResult, Inspection, Judge, Process, User
-from ..schemas import DashboardSummary, DefectTypeCount, ItemSummary, ProcessSummary, TrendPoint
+from ..models import AdminUser, FinalResult, ProductInspection
+from ..schemas import DashboardSummary, LabelCount, ProductSummary, StageCount, TrendPoint
 from ..security import get_current_user
-from ..services.products import aggregate_products, count_status, defect_rate
-from ..services.query import date_range, to_out
+from ..services.query import DEFECT_RESULTS, PENDING_RESULTS, date_range, to_summary
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+
+
+def _rows(db: Session, start, end) -> list[ProductInspection]:
+    P = ProductInspection
+    return db.scalars(select(P).where(P.created_at >= start, P.created_at < end)
+                      .order_by(P.created_at.desc(), P.id.desc())).all()
+
+
+def defect_rate(defect: int, normal: int) -> float:
+    """불량률(%) = 불량 / (정상 + 불량). 대기 중인 검사는 아직 결과가 없으니 뺀다"""
+    done = defect + normal
+    return round(defect / done * 100, 2) if done else 0.0
+
+
+def _v(x) -> str:
+    return getattr(x, "value", x)
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -31,59 +47,39 @@ def summary(
     d: date | None = Query(None, alias="date"),   # 쿼리스트링 이름은 date, 파이썬 변수는 d
     recent: int = Query(12, ge=1, le=50),          # 최근 불량 몇 건 보여줄지
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: AdminUser = Depends(get_current_user),
 ):
     d = d or date.today()
-    start, end = date_range(d, d)
-    in_day = (Inspection.inspected_at >= start) & (Inspection.inspected_at < end)  # 그날 조건 (재사용)
+    rows = _rows(db, *date_range(d, d))
 
-    # ---- 제품 단위 ----
-    products = aggregate_products(db, start, end)
-    c = count_status(products)
+    by_final = {f.value: 0 for f in FinalResult}   # 0건인 결과도 나오게
+    stages = {"DIMENSION": Counter(), "PATCHCORE": Counter(), "YOLO": Counter()}
+    products: dict[str, Counter] = defaultdict(Counter)
+    classes, codes = Counter(), Counter()
+    for r in rows:
+        by_final[r.final_result] += 1
+        stages["DIMENSION"][_v(r.dimension_result)] += 1
+        stages["PATCHCORE"][_v(r.patchcore_result)] += 1
+        stages["YOLO"][_v(r.yolo_status)] += 1
+        group = "defect" if r.final_result in DEFECT_RESULTS else "pending" if r.final_result in PENDING_RESULTS else "normal"
+        products[r.product_name][group] += 1
+        for x in r.yolo_defect_data or []:
+            classes[x.get("defect_class") or "unknown"] += 1
+            codes[x.get("defect_code") or "미분류"] += 1
 
-    # 품목별 상태 개수
-    by_item_acc: dict[str, dict[str, int]] = defaultdict(lambda: {"OK": 0, "NG": 0, "IN_PROGRESS": 0})
-    for p in products:
-        by_item_acc[p.item][p.status] += 1
-    by_item = [ItemSummary(item=k, products=sum(v.values()), ok=v["OK"], ng=v["NG"], in_progress=v["IN_PROGRESS"])
-               for k, v in sorted(by_item_acc.items())]
-
-    # ---- 검사(이미지) 단위 - 공정별 ----
-    # SELECT process, COUNT(*), SUM(CASE WHEN result='NG' THEN 1 ELSE 0 END) ... GROUP BY process
-    rows = db.execute(
-        select(Inspection.process, func.count(),
-               func.sum(case((Inspection.result == Judge.NG, 1), else_=0)))
-        .where(in_day).group_by(Inspection.process)
-    ).all()
-    counted = {p: (t, int(ng or 0)) for p, t, ng in rows}
-    # 검사가 0건인 공정도 0 으로 나오게 모든 공정을 돈다
-    by_process = [ProcessSummary(process=p, total=counted.get(p, (0, 0))[0],
-                                 ok=counted.get(p, (0, 0))[0] - counted.get(p, (0, 0))[1],
-                                 ng=counted.get(p, (0, 0))[1]) for p in Process]
-
-    # ---- 불량 유형 (PatchCore / YOLO) ----
-    type_rows = db.execute(
-        select(DefectResult.type, func.count())
-        .join(Inspection, DefectResult.inspection_id == Inspection.id)
-        .where(in_day, DefectResult.defect_detected.is_(True))
-        .group_by(DefectResult.type)
-    ).all()
-    defect_types = sorted([DefectTypeCount(type=t or "unknown", count=n) for t, n in type_rows],
-                          key=lambda x: x.count, reverse=True)  # 많은 순
-
-    # ---- 최근 불량 ----
-    recent_ng = db.scalars(
-        select(Inspection).where(in_day, Inspection.result == Judge.NG)
-        .order_by(Inspection.inspected_at.desc(), Inspection.id.desc()).limit(recent)
-    ).all()
-
+    normal = by_final[FinalResult.NORMAL.value]
+    defect = sum(by_final[k] for k in DEFECT_RESULTS)
+    pending = sum(by_final[k] for k in PENDING_RESULTS)
     return DashboardSummary(
-        date=d.isoformat(),
-        products=len(products), ok=c["OK"], ng=c["NG"], in_progress=c["IN_PROGRESS"],
-        defect_rate=defect_rate(c),
-        inspections=sum(x.total for x in by_process),
-        by_process=by_process, by_item=by_item, defect_types=defect_types,
-        recent_ng=[to_out(r) for r in recent_ng],
+        date=d.isoformat(), total=len(rows), normal=normal, defect=defect, pending=pending,
+        defect_rate=defect_rate(defect, normal),
+        by_final=by_final,
+        by_stage=[StageCount(stage=k, counts=dict(v)) for k, v in stages.items()],
+        by_product=[ProductSummary(product_name=k, total=sum(v.values()), normal=v["normal"],
+                                   defect=v["defect"], pending=v["pending"]) for k, v in sorted(products.items())],
+        defect_classes=[LabelCount(label=k, count=n) for k, n in classes.most_common()],  # 많은 순
+        defect_codes=[LabelCount(label=k, count=n) for k, n in sorted(codes.items())],
+        recent_defects=[to_summary(r) for r in rows if r.final_result in DEFECT_RESULTS][:recent],
     )
 
 
@@ -91,22 +87,21 @@ def summary(
 def hourly(
     d: date | None = Query(None, alias="date"),
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: AdminUser = Depends(get_current_user),
 ):
-    """시간대별 검사 건수 / NG 건수 (00시~23시, 24칸)"""
+    """시간대별 검사 수 / 불량 수 (00시~23시, 24칸)"""
     d = d or date.today()
     start, end = date_range(d, d)
-    rows = db.execute(
-        select(Inspection.inspected_at, Inspection.result)
-        .where(Inspection.inspected_at >= start, Inspection.inspected_at < end)
-    ).all()
-    # 시(hour)별 [전체, NG] 칸을 만들어 놓고 채운다 (DB 마다 시간 추출 함수가 달라서 파이썬에서 계산)
+    P = ProductInspection
+    rows = db.execute(select(P.created_at, P.final_result)
+                      .where(P.created_at >= start, P.created_at < end)).all()
+    # 시(hour)별 [전체, 불량] 칸을 만들어 놓고 채운다 (DB 마다 시간 추출 함수가 달라서 파이썬에서 계산)
     buckets = {h: [0, 0] for h in range(24)}
     for ts, res in rows:
         buckets[ts.hour][0] += 1
-        if res == Judge.NG:
+        if res in DEFECT_RESULTS:
             buckets[ts.hour][1] += 1
-    return [TrendPoint(label=f"{h:02d}", total=t, ng=n) for h, (t, n) in buckets.items()]
+    return [TrendPoint(label=f"{h:02d}", total=t, defect=n) for h, (t, n) in buckets.items()]
 
 
 @router.get("/daily", response_model=list[TrendPoint])
@@ -114,21 +109,22 @@ def daily(
     date_from: date | None = None,
     date_to: date | None = None,
     db: Session = Depends(get_db),
-    _user: User = Depends(get_current_user),
+    _user: AdminUser = Depends(get_current_user),
 ):
-    """일별 '제품' 수와 NG 제품 수"""
+    """일별 검사 수와 불량 수"""
     date_to = date_to or date.today()
     date_from = date_from or (date_to - timedelta(days=13))  # 기본 14일 (종료일 포함)
     start, end = date_range(date_from, date_to)
-    products = aggregate_products(db, start, end)
-
+    P = ProductInspection
+    rows = db.execute(select(P.created_at, P.final_result)
+                      .where(P.created_at >= start, P.created_at < end)).all()
     # 데이터가 없는 날도 0 으로 나오게 날짜 칸을 먼저 만든다
     days = {(date_from + timedelta(days=i)).isoformat(): [0, 0]
             for i in range((date_to - date_from).days + 1)}
-    for p in products:
-        k = p.first_at.date().isoformat()  # 제품은 '첫 검사한 날' 에 잡힌다
+    for ts, res in rows:
+        k = ts.date().isoformat()
         if k in days:
             days[k][0] += 1
-            if p.status == "NG":
+            if res in DEFECT_RESULTS:
                 days[k][1] += 1
-    return [TrendPoint(label=k, total=t, ng=n) for k, (t, n) in days.items()]
+    return [TrendPoint(label=k, total=t, defect=n) for k, (t, n) in days.items()]

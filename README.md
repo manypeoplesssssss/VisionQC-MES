@@ -1,7 +1,7 @@
 # VisionQC AI MES
 
-비전 검사 라인(**3D 모델링 치수검사 → 1차 PatchCore → 2차 YOLO**)의 결과와 이미지를 모아서
-**공정별로 조회**하고 **제품 단위로 추적**하는 MES.
+비전 검사 라인(**3D 치수 검사 → PatchCore → YOLO 불량 분류**)의 결과와 사진을 **검사 1회 단위**로 모아서
+최종 결과를 자동 판정하고, 불량 원인 후보와 권장 조치를 보여주는 MES.
 
 | 구분 | 기술 |
 |---|---|
@@ -9,7 +9,7 @@
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0, Pydantic 2 |
 | DB | MySQL 8 |
 | 이미지 | 로컬 폴더 저장 + DB 에 파일명 기록 |
-| 검사 PC 연동 | `vision_client/mes_client.py` (requests) |
+| 검사 PC 연동 | `inspection/common/mes_client.py` (requests) |
 
 ## 목차
 - [바로 시작](#바로-시작)
@@ -27,7 +27,7 @@
 ③ start.bat 더블클릭                                 (매일) → http://localhost:5173
 ```
 
-- 로그인: `admin` / `admin1234` (관리자), `operator` / `oper1234` (작업자)
+- 로그인: `admin` / `admin1234` (최고관리자), `manager` / `manager1234` (관리자), `viewer` / `viewer1234` (조회 전용)
 - API 문서: http://localhost:8000/docs
 - 테스트: `test.bat` (기능별 테스트 파일은 [FEATURES.md 8장](docs/FEATURES.md#8-테스트-파일--기능-대응표))
 - Docker 로 한 번에: `docker compose up -d --build` → http://localhost
@@ -35,25 +35,15 @@
 
 ## 화면
 
-> 아래 캡처는 더미 데이터(`seed.py --demo` 와 같은 방식)로 그린 화면입니다.
-
 | 메뉴 | 내용 |
 |---|---|
-| 대시보드 | 검사 제품·양품·불량·진행중·불량률, 공정 흐름(공정별 OK/NG), 시간대별·최근 14일 차트, 품목별 표, 불량 유형 순위, 최근 불량 이미지. 오늘이면 30초마다 자동 갱신 |
-| 공정별 검사 | 전체/3D/PatchCore/YOLO 탭, 기간·품목·판정·시리얼 필터, 이미지 보기(결함 박스), CSV 다운로드 |
-| 제품 추적 | 시리얼별 3공정 결과와 최종 상태, 재검사 횟수 → 클릭하면 공정 순서대로 이미지 이력 |
-| 치수 규격 | 품목별 기준값 ± 공차 (3D 치수 결과를 서버가 이 기준으로 판정) |
-| 사용자 | 계정 추가, 권한 변경, 사용 중지, 비밀번호 초기화 (관리자) |
+| 대시보드 | 검사·정상·불량·대기·불량률, 검사 흐름(3D 치수 → PatchCore → YOLO 단계별 건수), 최종 결과 6가지별 건수, 시간대별·최근 14일 차트, 불량 코드(D01~D05)·YOLO 결함 종류, 최근 불량 사진. 오늘이면 30초마다 자동 갱신 |
+| 검사 조회 | 검사 1회 = 한 줄. 불량 전체/판정 전/정상 탭, 기간·제품·최종 결과·제품번호 필터, CSV 다운로드 |
+| 검사 상세 | 3D 치수(실측·기준·차이·축별 합불), PatchCore 점수·기준, YOLO 결함 사진(표시 사진 / 원본 + 박스), 결함별 불량 코드 지정, 원인 후보·권장 조치 |
+| 불량 종류 | D01~D05 이름·분류·위치·원인 후보·권장 조치 (관리자 수정) |
+| 계정 관리 | 계정 추가, 권한(최고관리자/관리자/조회 전용), 이메일·불량 리포트 수신, 사용 중지, 비밀번호 초기화 (최고관리자) |
 
-| 대시보드 | 공정별 검사 (YOLO) |
-|---|---|
-| ![대시보드](docs/images/screen-dashboard.png) | ![공정별 검사 YOLO](docs/images/screen-inspections-yolo.png) |
-| **이미지 뷰어 (결함 박스)** | **공정별 검사 (3D 치수)** |
-| ![이미지 뷰어](docs/images/screen-image-viewer.png) | ![공정별 검사 3D](docs/images/screen-inspections-3d.png) |
-| **제품 추적** | **제품 이력** |
-| ![제품 추적](docs/images/screen-products.png) | ![제품 이력](docs/images/screen-product-history.png) |
-| **치수 규격** | **로그인** |
-| ![치수 규격](docs/images/screen-specs.png) | ![로그인](docs/images/screen-login.png) |
+> `docs/images/` 의 화면 캡처는 테이블 구조를 바꾸기 전 화면이라 지금 화면과 다릅니다.
 
 ## 설치 · 실행
 
@@ -100,7 +90,7 @@ node --version       :: v20.x 이상이면 OK
 |---|---|---|
 | 1 | `[1/5] Checking Python and Node.js ...` | Python 3.11 이상, Node.js 가 있는지 확인 |
 | 2 | `[2/5] Backend: creating virtual env backend\.venv ...` | `backend\.venv` 가상환경을 만들고 `backend\requirements-dev.txt` 의 패키지 설치 |
-| 3 | `[3/5] Vision client: installing packages ...` | `vision_client\requirements.txt` 의 패키지를 같은 가상환경에 설치 |
+| 3 | `[3/5] Inspection client: installing packages ...` | `inspection\common\requirements.txt` 의 패키지를 같은 가상환경에 설치 |
 | 4 | `[4/5] Frontend: npm install ...` | `frontend\package.json` 의 패키지 설치 (처음엔 몇 분 걸림) |
 | 5 | `[5/5] Settings file backend\.env ...` | 설정 파일 `backend\.env` 가 없으면 `.env.example` 을 복사해서 만듦 (있으면 손대지 않음) |
 | 선택 | `Create MySQL database/user and load demo data now? (y/n)` | `mysql` 명령이 있을 때만 물어봄. `y` → root 비밀번호 입력 → DB·계정 생성 + 더미 데이터 |
@@ -127,7 +117,7 @@ node --version       :: v20.x 이상이면 OK
    cd backend
    .venv\Scripts\python.exe seed.py --demo
    ```
-   → 관리자 `admin/admin1234`, 작업자 `operator/oper1234`, 품목 규격 3개, 최근 7일 더미 검사 데이터가 생깁니다.
+   → 계정 3개(`admin/admin1234` 최고관리자, `manager/manager1234` 관리자, `viewer/viewer1234` 조회 전용), 불량 종류 D01~D05, 최근 7일 더미 검사 데이터가 생깁니다.
 
 #### 다시 실행해도 되나요?
 네. 이미 설치된 건 건너뛰고 **빠지거나 바뀐 것만** 설치합니다. `.env` 도 이미 있으면 그대로 둡니다.
@@ -170,7 +160,7 @@ MySQL 없이 임시 DB 로 돌아가서, 서버를 켜지 않아도 됩니다. �
 | `backend/requirements.txt` | 백엔드 실행 | fastapi, uvicorn, sqlalchemy, pymysql, cryptography, pydantic, pydantic-settings, pyjwt, bcrypt, python-multipart, pillow |
 | `backend/requirements-dev.txt` | 위 + 테스트 | (requirements.txt 전부) + pytest, httpx |
 | `frontend/package.json` | 프론트엔드 | react, react-dom, react-router-dom, vite, @vitejs/plugin-react |
-| `vision_client/requirements.txt` | 검사 PC 클라이언트 | requests, numpy(선택), pytest(테스트용) |
+| `inspection/common/requirements.txt` | 검사 PC 클라이언트 | requests, numpy(선택), pytest(테스트용) |
 
 각 패키지가 무엇이고 왜 쓰는지는 [docs/PACKAGES.md](docs/PACKAGES.md).
 
@@ -219,9 +209,12 @@ Python 명령 이름이 다르면 `PYTHON=python3.12 bash install.sh` 처럼 지
 ### 검사 PC 에만 설치할 때
 
 MES 서버가 아니라 AI 검사 프로그램이 돌아가는 PC 라면 `install.bat` 은 필요 없습니다.
-`vision_client` 폴더의 `mes_client.py` 와 `requirements.txt` 만 복사해서
+`inspection` 폴더만 복사해서, 검사 프로그램 폴더마다 가상환경을 만듭니다 ([inspection/README.md](inspection/README.md)).
 ```bat
-pip install -r requirements.txt
+cd inspection\station_vision
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe inspection_app.py
 ```
 자세한 연동 방법은 [docs/SETUP.md 7장](docs/SETUP.md#7-검사-pc-연동).
 
@@ -240,17 +233,18 @@ pip install -r requirements.txt
 | `[WARN] DB creation failed.` | MySQL 꺼짐 / root 비밀번호 틀림 | `services.msc` 에서 `MySQL80` 시작, 비밀번호 확인 후 install.bat 다시 실행 |
 | start.bat: `Dependencies are not installed. Run install.bat first.` | 설치 전 | install.bat 먼저 |
 | start.bat 후 화면에 `요청 실패 (500)` | 백엔드 창에 오류 (대부분 DB 연결) | 백엔드 창의 빨간 글 확인 → MySQL 실행 여부, `backend\.env` 의 `DATABASE_URL` |
-| 백엔드 창: `Unknown column ...` | 예전 버전으로 만든 DB 테이블 | `cd backend` → `.venv\Scripts\python.exe seed.py --reset --demo` (**데이터 삭제됨**) |
+| 백엔드 창: `Unknown column ...` / `no such table` | 예전 구조로 만든 DB 테이블 (테이블 4개 구조로 바뀌기 전) | `cd backend` → `.venv\Scripts\python.exe seed.py --reset --demo` (**데이터 삭제됨**) |
 | 백엔드 창: `only one usage of each socket address` | 8000 포트를 이미 쓰는 중 (서버를 두 번 켬) | 기존 창 닫고 다시 start.bat |
 
 여기에 없는 문제는 [docs/SETUP.md 11장](docs/SETUP.md#11-문제-해결), 그래도 안 되면 오류 메시지 전체를 팀 채팅에 올려 주세요.
 
 ## 핵심 규칙 요약
 
-- **이미지 파일명**: `yyyy-mm-dd-품목-공정-시리얼.확장자` → `storage/images/yyyy-mm-dd/` 에 저장, DB 에 파일명·경로 기록. 재검사는 `_r2`
-- **치수 데이터**: `width_mm`, `length_mm`, `height_mm`, `status`
-- **결함 데이터**: `defect_detected`, `type`, `confidence`, `box [x1,y1,x2,y2]`
-- **제품 상태**: 공정별 마지막 결과 중 NG 가 있으면 불량, 3공정 모두 OK 면 양품, 아니면 진행중
+- **테이블 4개**: `product_inspection`(검사 1회 = 한 행), `product_dimension_inspection`(3D 치수), `defect_type`(불량 종류 D01~D05), `admin_user`(관리자). SQL 은 `backend/sql/schema.sql`
+- **검사 흐름**: 3D 치수(±3mm, 경계 포함 합격) → 불합격이면 종료 / 합격이면 PatchCore(점수 ≥ 기준이면 불합격) → 불합격이면 YOLO 불량 분류
+- **최종 결과(자동)**: `DIMENSION_PENDING` 치수 대기 · `DIMENSION_DEFECT` 치수 불합격 · `PATCHCORE_PENDING` PatchCore 대기 · `NORMAL` 정상 · `YOLO_PENDING` YOLO 분류 대기 · `PROCESS_DEFECT` 공정 불량. DB 생성 컬럼이라 앱이 값을 넣지 않음
+- **불량 코드**: YOLO 검출(scratch / white_paint)만으로는 D01~D05 가 자동 분류되지 않아 검사 상세에서 사람이 지정 → 원인 후보·권장 조치가 자동으로 모임 (원인은 확정이 아닌 후보)
+- **사진 파일명**: `일자-제품-시각-공정-검사번호_c사진번호[_annotated].확장자` → `storage/images/일자/` 에 저장, DB 에는 경로만 (`image_files` JSON)
 
 자세한 내용은 [ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -260,7 +254,10 @@ pip install -r requirements.txt
 VisionQC-MES/
 ├─ backend/        FastAPI 서버 (app/, tests/, sql/, seed.py)
 ├─ frontend/       React 화면 (src/pages, src/components, src/api)
-├─ vision_client/  검사 PC 용 전송 모듈
+├─ inspection/     검사 PC 프로그램
+│  ├─ common/         MES 전송 모듈 (mes_client.py)
+│  ├─ station_3d/     3D 치수 검사 (3D 환경)
+│  └─ station_vision/ PatchCore → YOLO, 턴테이블 버튼 화면 (비전 환경)
 ├─ docs/           문서 (images/ 에 화면 캡처)
 ├─ install.bat · start.bat · test.bat   설치 · 실행 · 테스트 (Mac/Linux: .sh)
 └─ docker-compose.yml

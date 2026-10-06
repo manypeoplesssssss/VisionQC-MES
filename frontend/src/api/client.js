@@ -85,50 +85,56 @@ async function download(path, params, fallbackName) {
   URL.revokeObjectURL(a.href);
 }
 
-/** 공정 코드와 화면 표시 이름 (백엔드 Process enum 과 같은 순서) */
-export const PROCESSES = [
-  { code: "DIM3D", label: "3D 치수검사", short: "3D" },
-  { code: "PATCHCORE", label: "1차 PatchCore", short: "PC" },
-  { code: "YOLO", label: "2차 YOLO", short: "YOLO" },
+/** 단계 판정 표시 이름 (치수 · PatchCore) */
+export const STAGE_LABEL = { PASS: "합격", FAIL: "불합격", PENDING: "대기" };
+/** YOLO 진행 상태 */
+export const YOLO_LABEL = { NOT_STARTED: "시작 전", IN_PROGRESS: "진행 중", COMPLETED: "완료" };
+/** 최종 결과 6가지 (백엔드 FinalResult 와 같은 순서). tone: 배지 색 */
+export const FINAL_RESULTS = [
+  { code: "DIMENSION_PENDING", label: "치수 검사 대기", tone: "wip" },
+  { code: "DIMENSION_DEFECT", label: "치수 불합격", tone: "ng" },
+  { code: "PATCHCORE_PENDING", label: "PatchCore 대기", tone: "wip" },
+  { code: "NORMAL", label: "정상", tone: "ok" },
+  { code: "YOLO_PENDING", label: "YOLO 분류 대기", tone: "ng" },
+  { code: "PROCESS_DEFECT", label: "공정 불량", tone: "ng" },
 ];
-export const processLabel = (code) => PROCESSES.find((p) => p.code === code)?.label ?? code;
-
-/** 제품 상태 표시 이름 */
-export const STATUS_LABEL = { OK: "양품", NG: "불량", IN_PROGRESS: "진행중" };
+export const finalLabel = (code) => FINAL_RESULTS.find((f) => f.code === code)?.label ?? code;
+/** 관리자 권한 */
+export const ROLE_LABEL = { SUPER_ADMIN: "최고관리자", ADMIN: "관리자", VIEWER: "조회 전용" };
+export const isAdmin = (user) => user?.role === "ADMIN" || user?.role === "SUPER_ADMIN";
 
 export const todayStr = () => new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD (로컬)
 export const fmtTime = (iso) => iso?.replace("T", " ").slice(0, 19) ?? ""; // "2026-10-05T14:03:11" → "2026-10-05 14:03:11"
 
+const enc = encodeURIComponent;
+
 /** 백엔드 API 목록. 주소와 파라미터는 backend/app/routers/*.py 와 1:1 로 대응 */
 export const api = {
-  // 인증 (F03·F04, A)
+  // 인증
   login: (username, password) => request("/api/auth/login", { method: "POST", body: { username, password } }),
   me: () => request("/api/auth/me"),
   changePassword: (current_password, new_password) =>
     request("/api/auth/password", { method: "PUT", body: { current_password, new_password } }),
 
-  // 대시보드 (F10·F11, C)
+  // 대시보드
   summary: (date) => request("/api/dashboard/summary", { params: { date } }),
   hourly: (date) => request("/api/dashboard/hourly", { params: { date } }),
   daily: (date_from, date_to) => request("/api/dashboard/daily", { params: { date_from, date_to } }),
 
-  // 검사 조회·CSV (F12·F13·F14, D)
+  // 검사 조회 · 불량 코드 · 삭제 · CSV
   inspections: (params) => request("/api/inspections", { params }),
-  inspection: (id) => request(`/api/inspections/${id}`),
-  deleteInspection: (id) => request(`/api/inspections/${id}`, { method: "DELETE" }),
+  inspection: (id) => request(`/api/inspections/${enc(id)}`),
+  setDefectCode: (id, index, defect_code) =>
+    request(`/api/inspections/${enc(id)}/defects/${index}`, { method: "PUT", body: { defect_code } }),
+  deleteInspection: (id) => request(`/api/inspections/${enc(id)}`, { method: "DELETE" }),
   exportCsv: (params) => download("/api/inspections/export", params, "inspections.csv"),
-  items: () => request("/api/items"),
+  products: () => request("/api/products"),
 
-  // 제품 (F09 API=C, F15 화면=D)
-  products: (params) => request("/api/products", { params }),
-  history: (serial) => request(`/api/products/${encodeURIComponent(serial)}/history`),
+  // 불량 종류
+  defectTypes: () => request("/api/defect-types"),
+  saveDefectType: (code, body) => request(`/api/defect-types/${enc(code)}`, { method: "PUT", body }),
 
-  // 규격 (F07, B)
-  specs: () => request("/api/specs"),
-  saveSpec: (item, spec) => request(`/api/specs/${encodeURIComponent(item)}`, { method: "PUT", body: spec }),
-  deleteSpec: (item) => request(`/api/specs/${encodeURIComponent(item)}`, { method: "DELETE" }),
-
-  // 사용자 (F04, A)
+  // 관리자 계정 (최고관리자)
   users: () => request("/api/users"),
   createUser: (body) => request("/api/users", { method: "POST", body }),
   updateUser: (id, body) => request(`/api/users/${id}`, { method: "PATCH", body }),

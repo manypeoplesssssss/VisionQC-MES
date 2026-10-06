@@ -1,9 +1,9 @@
 /**
- * 내 계정 (pages/Account.jsx)   [기능 F04 · 담당 A]
+ * 내 계정 (pages/Account.jsx)
  * 내 정보 확인 + 비밀번호 변경. 상단 메뉴 오른쪽의 이름을 누르면 들어온다.
  */
 import { useState } from "react";
-import { api } from "../api/client.js";
+import { api, fmtTime, ROLE_LABEL } from "../api/client.js";
 import { useAuth } from "../context/AuthContext.jsx";
 
 export default function Account() {
@@ -34,7 +34,10 @@ export default function Account() {
         <dl className="kv">
           <dt>아이디</dt><dd className="mono">{user.username}</dd>
           <dt>이름</dt><dd>{user.name}</dd>
-          <dt>권한</dt><dd>{user.role === "ADMIN" ? "관리자" : "작업자"}</dd>
+          <dt>권한</dt><dd>{ROLE_LABEL[user.role] ?? user.role}</dd>
+          <dt>이메일</dt><dd>{user.email || "-"}</dd>
+          <dt>리포트</dt><dd>{user.receive_defect_reports ? "불량 리포트 수신" : "수신 안 함"}</dd>
+          <dt>로그인</dt><dd className="small">{fmtTime(user.last_login_at) || "-"}</dd>
         </dl>
         <h3>비밀번호 변경</h3>
         <form className="form-body" onSubmit={submit}>

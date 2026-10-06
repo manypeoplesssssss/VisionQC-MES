@@ -19,7 +19,7 @@ from sqlalchemy import text
 
 from .config import settings
 from .database import Base, SessionLocal, engine
-from .routers import auth, dashboard, images, ingest, inspections, products, specs, users
+from .routers import auth, dashboard, defect_types, images, ingest, inspections, users
 
 # 콘솔에 "시각 레벨 이름: 메시지" 형식으로 로그 출력
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -30,7 +30,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="VisionQC AI MES API",
     version="1.0.0",
-    description="비전 검사(3D 치수 → PatchCore → YOLO) 결과 수집·조회 API",
+    description="비전 검사(3D 치수 → PatchCore → YOLO) 결과 수집·조회 API. 검사 1회 = product_inspection 1행",
 )
 
 # CORS: 개발 중에는 Vite 프록시를 써서 필요 없지만, 프론트를 다른 주소에서 띄울 때를 대비
@@ -42,9 +42,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 기능별 API 묶음 등록 (각 파일의 router 객체). 파일과 기능 번호는 docs/FEATURES.md 참고
-#   auth(F03) users(F04) ingest(F05) specs(F07) inspections(F12·F13·F14) products(F09) dashboard(F10·F11) images(F13)
-for r in (auth, users, ingest, specs, inspections, products, dashboard, images):
+# 기능별 API 묶음 등록 (각 파일의 router 객체)
+#   auth 로그인 · users 관리자 계정 · ingest 검사 PC 결과 등록 · inspections 조회·불량 코드·삭제
+#   defect_types 불량 종류 · dashboard 대시보드 · images 사진 파일
+for r in (auth, users, ingest, inspections, defect_types, dashboard, images):
     app.include_router(r.router)
 
 

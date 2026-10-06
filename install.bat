@@ -51,9 +51,9 @@ backend\.venv\Scripts\python.exe -m pip install -r backend\requirements-dev.txt
 if errorlevel 1 goto :fail
 echo.
 
-REM ---------- 3. vision client packages (for running its tests on this PC) ----------
-echo [3/5] Vision client: installing packages into the same virtual env ...
-backend\.venv\Scripts\python.exe -m pip install -r vision_client\requirements.txt
+REM ---------- 3. inspection client packages (for running its tests on this PC) ----------
+echo [3/5] Inspection client: installing packages into the same virtual env ...
+backend\.venv\Scripts\python.exe -m pip install -r inspection\common\requirements.txt
 if errorlevel 1 goto :fail
 echo.
 

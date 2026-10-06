@@ -1,5 +1,8 @@
 # 기능별 개발 계획
 
+> 2026-10-06: DB 가 테이블 4개 구조(`product_inspection`, `product_dimension_inspection`, `defect_type`, `admin_user`)로 바뀌었습니다.
+> 이 문서의 기능 목록·일정은 처음 개발 계획 기준이라 이전 구조(공정별 검사 행, 품목 규격, 제품 추적)를 설명합니다. 현재 구조는 [ARCHITECTURE.md](ARCHITECTURE.md).
+
 VisionQC AI MES 를 **기능 19개(F00 ~ F18)** 로 나눈 개발 단위 문서입니다.
 기능 하나 = 브랜치 하나 = PR 하나 = 이슈 하나로 개발합니다.
 
@@ -172,7 +175,7 @@ flowchart LR
 - [ ] 치수 컬럼: `width_mm` `length_mm` `height_mm` `status` (+ `reported_status`)
 - [ ] 결함 컬럼: `defect_detected` `type` `confidence` `box`
 - [ ] 공정 코드: `DIM3D` `PATCHCORE` `YOLO` / 판정 `OK` `NG` / 권한 `ADMIN` `OPERATOR`
-- [ ] 이미지 파일명 규칙: `yyyy-mm-dd-품목-공정-시리얼.확장자`
+- [ ] 이미지 파일명 규칙: `yyyy-mm-dd-품목-HHMMSS-공정-시리얼.확장자`
 - [ ] 응답 형식: `InspectionOut`, `InspectionPage`, `ProductOut`, `DashboardSummary`, `TrendPoint` …
 
 완료 기준
@@ -284,7 +287,7 @@ flowchart LR
 | 먼저 줄 것 | `build_filename()` — **1주차에 먼저 PR** (C 의 F02 가 사용) |
 
 구현 체크리스트
-- [ ] 파일명 `2026-10-05-Redcar-DIM3D-SN0001.png`, 폴더 `storage/images/2026-10-05/`
+- [ ] 파일명 `2026-10-05-Redcar-143005-DIM3D-SN0001.png`, 폴더 `storage/images/2026-10-05/`
 - [ ] 시리얼 안의 `-` 는 `_` 로 (구분자와 안 섞이게)
 - [ ] 재검사는 `_r2` `_r3` (덮어쓰기 금지, `open(..., "xb")`)
 - [ ] 확장자 `.jpg .jpeg .png .bmp`, 20MB 제한, 빈 파일 거부
