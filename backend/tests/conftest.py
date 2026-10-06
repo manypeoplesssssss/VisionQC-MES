@@ -24,7 +24,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp / 'test.db'}"
 os.environ["STORAGE_DIR"] = str(_tmp / "images")
 os.environ["INGEST_API_KEY"] = "test-key"
 os.environ["JWT_SECRET"] = "test-secret"
-os.environ["PRODUCT_STANDARDS"] = '{"redcar": [40, 90, 30]}'
+os.environ["PRODUCT_STANDARDS"] = '{"redcar": [194.5, 84.96, 58.68]}'
 # backend 폴더를 import 경로에 추가 (어디서 pytest 를 실행해도 app 패키지를 찾게)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -102,7 +102,7 @@ def mes(client):
             assert r.status_code == expect, r.text
             return r.json()
 
-        def dimension(self, iid, w=40.0, length=90.0, h=30.0, expect=200, **kw):
+        def dimension(self, iid, w=194.5, length=84.96, h=58.68, expect=200, **kw):
             r = client.put(f"/api/inspections/{iid}/dimension", headers=KEY,
                            json={"width_mm": w, "length_mm": length, "height_mm": h, **kw})
             assert r.status_code == expect, r.text

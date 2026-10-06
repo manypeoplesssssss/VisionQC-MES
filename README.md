@@ -241,7 +241,7 @@ python -m venv .venv
 ## 핵심 규칙 요약
 
 - **테이블 4개**: `product_inspection`(검사 1회 = 한 행), `product_dimension_inspection`(3D 치수), `defect_type`(불량 종류 D01~D05), `admin_user`(관리자). SQL 은 `backend/sql/schema.sql`
-- **검사 흐름**: 3D 치수(±3mm, 경계 포함 합격) → 불합격이면 종료 / 합격이면 PatchCore(점수 ≥ 기준이면 불합격) → 불합격이면 YOLO 불량 분류
+- **검사 흐름**: 3D 치수(기준 194.50 × 84.96 × 58.68mm, 축별 가로 ±1.5 / ±2.5, 길이(전폭) ±2.0 / ±3.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계), 사이는 재검) → 불합격이면 종료 / 합격이면 PatchCore(점수 ≥ 기준이면 불합격) → 불합격이면 YOLO 불량 분류
 - **최종 결과(자동)**: `DIMENSION_PENDING` 치수 대기 · `DIMENSION_DEFECT` 치수 불합격 · `PATCHCORE_PENDING` PatchCore 대기 · `NORMAL` 정상 · `YOLO_PENDING` YOLO 분류 대기 · `PROCESS_DEFECT` 공정 불량. DB 생성 컬럼이라 앱이 값을 넣지 않음
 - **불량 코드**: YOLO 검출(scratch / white_paint)만으로는 D01~D05 가 자동 분류되지 않아 검사 상세에서 사람이 지정 → 원인 후보·권장 조치가 자동으로 모임 (원인은 확정이 아닌 후보)
 - **사진 파일명**: `일자-제품-시각-공정-검사번호_c사진번호[_annotated].확장자` → `storage/images/일자/` 에 저장, DB 에는 경로만 (`image_files` JSON)
@@ -257,6 +257,7 @@ VisionQC-MES/
 ├─ inspection/     검사 PC 프로그램
 │  ├─ common/         MES 전송 모듈 (mes_client.py)
 │  ├─ station_3d/     3D 치수 검사 (3D 환경)
+│  ├─ bridge_3d/      3D 결과 → MES · 비전 연결
 │  └─ station_vision/ PatchCore → YOLO, 턴테이블 버튼 화면 (비전 환경)
 ├─ docs/           문서 (images/ 에 화면 캡처)
 ├─ install.bat · start.bat · test.bat   설치 · 실행 · 테스트 (Mac/Linux: .sh)

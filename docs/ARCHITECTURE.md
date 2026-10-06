@@ -104,7 +104,8 @@ VisionQC-MES/
 │  │  ├─ mes_client.py              단계별 전송 모듈 (재전송 큐, YOLO 결과 변환)
 │  │  ├─ test_mes_client.py         가짜 서버로 도는 테스트
 │  │  └─ example_pipeline.py        3단계 한 사이클 예시
-│  ├─ station_3d/                   3D 치수 검사 (3D 환경 가상환경, 코드 들어갈 자리)
+│  ├─ station_3d/                   3D 스캔 치수 검사 코드 (3D 담당, 수정하지 않음)
+│  ├─ bridge_3d/                    3D 측정 결과 → MES 전송 + handoff 기록 (send_3d_to_mes.py)
 │  ├─ station_vision/               PatchCore → YOLO (비전 환경 가상환경)
 │  │  ├─ inspection_app.py          버튼 화면: 턴테이블 + YOLO + MES 자동 전송 (--sim 시뮬레이션)
 │  │  ├─ yolo_live.py               키보드 조작 검사 프로그램 (검사 영역, 촬영 로직)
@@ -230,8 +231,8 @@ storage/images/2026-10-06/2026-10-06-redcar-143005-YOLO-20261006_inspection_1430
 
 | 대상 | 규칙 |
 |---|---|
-| 치수 축별 | 실측·기준 중 하나라도 없으면 `PENDING`, `|실측 − 기준| ≤ 3mm` 이면 `PASS` (정확히 3mm 포함), 아니면 `FAIL` |
-| 치수 종합 | 하나라도 `FAIL` → `FAIL`, (FAIL 없이) 하나라도 `PENDING` → `PENDING`, 셋 다 `PASS` → `PASS` |
+| 치수 축별 | 실측·기준 중 하나라도 없으면 `PENDING`, `|편차|` ≤ 정상 한계 `PASS`, ≤ 불량 한계 `RECHECK`(재검, 다시 스캔), 초과 `FAIL` (경계값은 좋은 쪽). 한계: 가로 ±1.5 / ±2.5, 길이(전폭) ±2.0 / ±3.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계) = `models.py` 의 `DIM_RECHECK_MM` / `DIM_TOLERANCE_MM`, 3D 코드 `station_3d/config.py` 와 같은 값 |
+| 치수 종합 | 하나라도 `FAIL` → `FAIL`, (FAIL 없이) 누락 → `PENDING`, 하나라도 `RECHECK` → `RECHECK`, 셋 다 `PASS` → `PASS`. `RECHECK` 는 최종 결과에서 `DIMENSION_PENDING` |
 | 기준 치수 | 검사 PC 가 보낸 값 > 서버 설정 `PRODUCT_STANDARDS[제품]` |
 | PatchCore | 이상 점수 ≥ 기준 → `FAIL`, 아니면 `PASS` (서버 판정, 기준값을 같이 저장) |
 | 최종 결과 | 치수 대기 → `DIMENSION_PENDING` / 치수 불합격 → `DIMENSION_DEFECT` / PatchCore 대기 → `PATCHCORE_PENDING` / PatchCore 합격 → `NORMAL` / PatchCore 불합격 + YOLO 완료 → `PROCESS_DEFECT` / 그 외 → `YOLO_PENDING` |
@@ -418,8 +419,8 @@ main.jsx
 ### 불량 종류 추가
 [불량 종류] 화면에서 관리자가 추가 (예: D06). 코드 수정 없음.
 
-### 허용오차(±3mm) 변경
-`models.py` 의 `DIM_TOLERANCE_MM` 와 `sql/schema.sql` 의 `3.000001` 을 같이 바꾸고, 생성 컬럼이라 기존 DB 는 `ALTER TABLE ... MODIFY ...` 로 식을 다시 정의 (개발 중이면 `seed.py --reset`).
+### 치수 판정 한계 변경
+`models.py` 의 `DIM_TOLERANCE_MM` / `DIM_RECHECK_MM`, `sql/schema.sql` 의 숫자(`2.500001` 등), 3D 코드 `station_3d/config.py` 의 `TOLERANCE_MM` / `RECHECK_MM` 을 같이 바꾸고, 생성 컬럼이라 기존 DB 는 `ALTER TABLE ... MODIFY ...` 로 식을 다시 정의 (개발 중이면 `seed.py --reset`).
 
 ### DB 컬럼 추가
 1. `models.py` 에 컬럼 추가

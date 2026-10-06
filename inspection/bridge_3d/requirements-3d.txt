@@ -1,0 +1,10 @@
+# 3D 스캔 PC 가상환경 (station_3d 코드 + bridge_3d 전송) 에 설치할 패키지
+# 설치: inspection\station_3d 폴더에서 (가상환경은 그 폴더에)
+#   python -m venv .venv
+#   .venv\Scripts\python.exe -m pip install -r ..\bridge_3d\requirements-3d.txt
+pyrealsense2        # Intel RealSense D435 카메라
+open3d              # 포인트클라우드 병합 · 측정
+opencv-python       # 사진 · 마스크 처리
+numpy
+pyserial            # 아두이노 턴테이블 시리얼 통신
+requests>=2.31      # MES 전송 (bridge_3d → ../common/mes_client.py)

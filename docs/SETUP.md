@@ -335,7 +335,8 @@ pytest -v
 ### 7-1. 검사 PC 에 폴더 복사
 저장소의 `inspection\` 폴더를 검사 PC 로 복사합니다 (MES 서버·화면 폴더는 필요 없음). 구성은 [inspection/README.md](../inspection/README.md).
 - `common\` : MES 전송 모듈 `mes_client.py` (두 검사 프로그램이 같이 씀)
-- `station_3d\` : 3D 치수 검사 (3D 환경)
+- `station_3d\` : 3D 치수 검사 (3D 환경, 3D 담당 코드)
+- `bridge_3d\` : 3D 측정 결과를 MES 로 보내고 비전 검사로 검사번호를 넘기는 연결 프로그램
 - `station_vision\` : PatchCore → YOLO 검사, 턴테이블 버튼 화면 (비전 환경)
 
 ### 7-2. 패키지 설치 (검사 프로그램 폴더마다 가상환경 따로)
@@ -369,8 +370,8 @@ mes.complete_yolo(iid)                                   # 4) 한 바퀴 끝 →
 
 | 최종 결과 (자동) | 뜻 |
 |---|---|
-| `DIMENSION_PENDING` | 치수 검사 대기 (치수가 아직 안 들어옴, 또는 하나라도 누락) |
-| `DIMENSION_DEFECT` | 치수 불합격 (±3mm 초과) |
+| `DIMENSION_PENDING` | 치수 대기·재검 (치수가 아직 안 들어옴, 하나라도 누락, 또는 재검이라 다시 스캔 필요) |
+| `DIMENSION_DEFECT` | 치수 불합격 (축별 불량 한계 초과) |
 | `PATCHCORE_PENDING` | 치수 합격, PatchCore 대기 |
 | `NORMAL` | 치수와 PatchCore 모두 합격 |
 | `YOLO_PENDING` | PatchCore 불합격, YOLO 분류 대기 (사진이 들어오는 중이어도 완료 전이면 여기) |
@@ -385,7 +386,8 @@ mes.complete_yolo(iid)                                   # 4) 한 바퀴 끝 →
 | 사진 | `.jpg` `.jpeg` `.png` `.bmp`, 20MB 이하 | |
 | 결함 박스 `box` | `[x1, y1, x2, y2]`, **원본 사진 픽셀 기준** | `[120, 80, 180, 130]` |
 | 신뢰도 `confidence` | 0 ~ 1 | `0.91` |
-| 기준 치수 | 서버 `.env` 의 `PRODUCT_STANDARDS={"redcar": [가로, 길이, 높이]}` (redcar 실제 값은 확정 후 입력) | `[40, 90, 30]` |
+| 기준 치수 | `bridge_3d` 가 3D `station_3d/config.py` 의 `NOMINAL_MM` 을 같이 보냄. 안 보내면 서버 `.env` 의 `PRODUCT_STANDARDS={"redcar": [가로, 길이, 높이]}` | `[194.50, 84.96, 58.68]` |
+| 판정 한계 | 가로 ±1.5 / ±2.5, 길이(전폭) ±2.0 / ±3.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계). 3D 코드 `TOLERANCE_MM` / `RECHECK_MM` 과 같은 값 | |
 
 ### 7-5. 서버가 꺼져 있을 때
 `mes_queue\` 폴더에 요청(사진 복사본 포함)이 쌓이고, 다음 전송 때 보낸 순서 그대로 자동으로 다시 보냅니다. 시각 값은 처음 그대로 들어갑니다. 서버가 형식 오류로 거부한 건은 `mes_queue_failed\` 로 옮겨지니 가끔 확인하세요.

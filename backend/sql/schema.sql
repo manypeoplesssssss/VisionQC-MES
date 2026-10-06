@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS product_inspection (
     image_files             JSON         NOT NULL,                              -- 이미지별 파일 경로 배열 [{capture_number, original_path, annotated_path, metadata_path}]
     final_result            VARCHAR(32)  GENERATED ALWAYS AS (                  -- [자동] 최종 검사 결과
         CASE
-            WHEN dimension_result IS NULL OR dimension_result = 'PENDING' THEN 'DIMENSION_PENDING'
+            WHEN dimension_result IS NULL OR dimension_result IN ('PENDING', 'RECHECK') THEN 'DIMENSION_PENDING'   -- 재검은 다시 스캔할 때까지 대기
             WHEN dimension_result = 'FAIL' THEN 'DIMENSION_DEFECT'
             WHEN patchcore_result IS NULL OR patchcore_result = 'PENDING' THEN 'PATCHCORE_PENDING'
             WHEN patchcore_result = 'PASS' THEN 'NORMAL'
@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS product_inspection (
     report_sent_at          DATETIME     NULL,                                  -- 리포트 발송 성공 시각
     created_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,    -- 검사 행 생성 시각 (검사 시작 시각)
     updated_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    CONSTRAINT ck_pi_dimension_result CHECK (dimension_result IN ('PENDING','PASS','FAIL')),
+    CONSTRAINT ck_pi_dimension_result CHECK (dimension_result IN ('PENDING','PASS','RECHECK','FAIL')),
     CONSTRAINT ck_pi_patchcore_result CHECK (patchcore_result IN ('PENDING','PASS','FAIL')),
     CONSTRAINT ck_pi_yolo_status      CHECK (yolo_status IN ('NOT_STARTED','IN_PROGRESS','COMPLETED')),
     INDEX ix_pi_product_created (product_name, created_at),
@@ -61,8 +61,14 @@ CREATE TABLE IF NOT EXISTS product_inspection (
 );
 
 -- ---------------------------------------------------------------------------
--- 3D 치수: 전체 검사 1회당 0~1행. 기준 치수는 검사 당시 값으로 보관. 허용오차 ±3mm (정확히 3mm 는 합격)
--- 종합: 하나라도 초과 → FAIL, (초과 없이) 하나라도 누락 → PENDING, 나머지 PASS
+-- 3D 치수: 전체 검사 1회당 0~1행. 기준 치수는 검사 당시 값으로 보관.
+-- 판정 한계 (mm, inspection/station_3d/config.py 와 같은 값. 정상 차 5회 스캔 표준편차의 2배·3배)
+--          정상(재검) 한계   불량 한계
+--   가로        1.5            2.5
+--   길이(전폭)   2.0            3.5
+--   높이        1.5            2.0
+-- 축별: |편차| <= 정상 한계 PASS, ~ 불량 한계 RECHECK(재검, 다시 스캔), 초과 FAIL, 값 없음 PENDING (경계값은 좋은 쪽)
+-- 종합: 하나라도 FAIL → FAIL, (FAIL 없이) 하나라도 누락 → PENDING, 하나라도 RECHECK → RECHECK, 나머지 PASS
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS product_dimension_inspection (
     id                 INT AUTO_INCREMENT PRIMARY KEY,                         -- 치수 검사 행 식별번호
@@ -73,17 +79,32 @@ CREATE TABLE IF NOT EXISTS product_dimension_inspection (
     standard_width_mm  DOUBLE NULL,                                            -- 기준 가로 (mm)
     standard_length_mm DOUBLE NULL,                                            -- 기준 길이 (mm)
     standard_height_mm DOUBLE NULL,                                            -- 기준 높이 (mm)
-    width_result       VARCHAR(16) GENERATED ALWAYS AS (CASE WHEN width_mm IS NULL OR standard_width_mm IS NULL THEN 'PENDING' WHEN ABS(width_mm - standard_width_mm) <= 3.000001 THEN 'PASS' ELSE 'FAIL' END) STORED NOT NULL,     -- [자동] 가로 합불
-    length_result      VARCHAR(16) GENERATED ALWAYS AS (CASE WHEN length_mm IS NULL OR standard_length_mm IS NULL THEN 'PENDING' WHEN ABS(length_mm - standard_length_mm) <= 3.000001 THEN 'PASS' ELSE 'FAIL' END) STORED NOT NULL, -- [자동] 길이 합불
-    height_result      VARCHAR(16) GENERATED ALWAYS AS (CASE WHEN height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING' WHEN ABS(height_mm - standard_height_mm) <= 3.000001 THEN 'PASS' ELSE 'FAIL' END) STORED NOT NULL, -- [자동] 높이 합불
-    dimension_result   VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 세 치수 종합 합불
+    width_result       VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 가로 판정
+        CASE WHEN width_mm IS NULL OR standard_width_mm IS NULL THEN 'PENDING'
+             WHEN ABS(width_mm - standard_width_mm) > 2.500001 THEN 'FAIL'
+             WHEN ABS(width_mm - standard_width_mm) > 1.500001 THEN 'RECHECK'
+             ELSE 'PASS' END) STORED NOT NULL,
+    length_result      VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 길이 판정
+        CASE WHEN length_mm IS NULL OR standard_length_mm IS NULL THEN 'PENDING'
+             WHEN ABS(length_mm - standard_length_mm) > 3.500001 THEN 'FAIL'
+             WHEN ABS(length_mm - standard_length_mm) > 2.000001 THEN 'RECHECK'
+             ELSE 'PASS' END) STORED NOT NULL,
+    height_result      VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 높이 판정
+        CASE WHEN height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING'
+             WHEN ABS(height_mm - standard_height_mm) > 2.000001 THEN 'FAIL'
+             WHEN ABS(height_mm - standard_height_mm) > 1.500001 THEN 'RECHECK'
+             ELSE 'PASS' END) STORED NOT NULL,
+    dimension_result   VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 세 치수 종합 판정
         CASE
-            WHEN (width_mm IS NOT NULL AND standard_width_mm IS NOT NULL AND ABS(width_mm - standard_width_mm) > 3.000001)
-              OR (length_mm IS NOT NULL AND standard_length_mm IS NOT NULL AND ABS(length_mm - standard_length_mm) > 3.000001)
-              OR (height_mm IS NOT NULL AND standard_height_mm IS NOT NULL AND ABS(height_mm - standard_height_mm) > 3.000001) THEN 'FAIL'
+            WHEN (width_mm IS NOT NULL AND standard_width_mm IS NOT NULL AND ABS(width_mm - standard_width_mm) > 2.500001)
+              OR (length_mm IS NOT NULL AND standard_length_mm IS NOT NULL AND ABS(length_mm - standard_length_mm) > 3.500001)
+              OR (height_mm IS NOT NULL AND standard_height_mm IS NOT NULL AND ABS(height_mm - standard_height_mm) > 2.000001) THEN 'FAIL'
             WHEN width_mm IS NULL OR standard_width_mm IS NULL
               OR length_mm IS NULL OR standard_length_mm IS NULL
               OR height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING'
+            WHEN ABS(width_mm - standard_width_mm) > 1.500001
+              OR ABS(length_mm - standard_length_mm) > 2.000001
+              OR ABS(height_mm - standard_height_mm) > 1.500001 THEN 'RECHECK'
             ELSE 'PASS'
         END) STORED NOT NULL,
     scan_file_path     VARCHAR(500) NULL,                                      -- 3D 스캔 원본 경로

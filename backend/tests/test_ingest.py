@@ -13,26 +13,33 @@ def test_full_flow_normal(mes):
     """치수 합격 → PatchCore 합격 → 최종 NORMAL"""
     r = mes.start("I1", serial="RC-0001", capture_folder="captures/x")
     assert r["final_result"] == "DIMENSION_PENDING" and r["yolo_status"] == "NOT_STARTED"
-    r = mes.dimension("I1", 42.0, 88.5, 31.0)
+    r = mes.dimension("I1", 195.5, 84.0, 59.5)
     assert r["dimension_result"] == "PASS"
-    assert r["dimension"]["standard_width_mm"] == 40  # 서버 설정(PRODUCT_STANDARDS)의 기준
+    assert r["dimension"]["standard_width_mm"] == 194.5  # 서버 설정(PRODUCT_STANDARDS)의 기준
+    assert r["dimension_data"]["tolerance_mm"]["length"] == 3.5
     assert r["final_result"] == "PATCHCORE_PENDING"
     r = mes.patchcore("I1", 0.3)
     assert r["patchcore_result"] == "PASS" and r["final_result"] == "NORMAL"
 
 
 def test_dimension_rules(mes):
-    """±3mm 이내 합격(경계 포함), 초과 불합격, 누락 대기. 기준값은 보낸 값이 우선"""
+    """축별 한계 (가로 1.5/2.5, 길이 2.0/3.5, 높이 1.5/2.0): 재검 한계 이내 합격(경계 포함),
+    재검 한계~불량 한계 재검, 불량 한계 초과 불합격, 누락 대기. 기준값은 보낸 값이 우선"""
     mes.start("D1")
-    r = mes.dimension("D1", 43.0, 93.1, 33.1, standard_length_mm=90.1, standard_height_mm=30.1)
+    r = mes.dimension("D1", 101.5, 52.1, 31.6, standard_width_mm=100, standard_length_mm=50.1,
+                      standard_height_mm=30.1)
     d = r["dimension"]
     assert (d["width_result"], d["length_result"], d["height_result"]) == ("PASS", "PASS", "PASS")
+    mes.start("R1")
+    r = mes.dimension("R1", 197.0, 84.96, 58.68)  # 가로 편차 2.5 = 불량 한계 경계 → 재검
+    assert r["dimension"]["width_result"] == "RECHECK"
+    assert r["dimension_result"] == "RECHECK" and r["final_result"] == "DIMENSION_PENDING"
     mes.start("D2")
-    r = mes.dimension("D2", 43.1, 90.0, None)
+    r = mes.dimension("D2", 197.1, 84.96, None)
     assert r["dimension"]["width_result"] == "FAIL" and r["dimension"]["height_result"] == "PENDING"
     assert r["dimension_result"] == "FAIL" and r["final_result"] == "DIMENSION_DEFECT"
     mes.start("D3")
-    r = mes.dimension("D3", 40.0, 90.0, None)
+    r = mes.dimension("D3", 194.5, 84.96, None)
     assert r["dimension_result"] == "PENDING" and r["final_result"] == "DIMENSION_PENDING"
 
 

@@ -49,9 +49,10 @@ class Settings(BaseSettings):
     # ---------- 3D 치수 기준 ----------
     # 제품 모델별 기준 치수 [가로, 길이, 높이] (mm). 검사 PC 가 기준값을 안 보내면 이 값을 쓴다.
     # 검사할 때마다 그 당시 값이 product_dimension_inspection 행에 복사되므로, 바꿔도 지난 검사는 그대로.
-    # .env 에서는 JSON 으로: PRODUCT_STANDARDS={"redcar": [40, 90, 30]}
-    # (redcar 실제 기준은 아직 미확정 → 확정되면 이 값만 바꾸면 된다)
-    PRODUCT_STANDARDS: dict[str, list[float]] = {"redcar": [40.0, 90.0, 30.0]}
+    # .env 에서는 JSON 으로: PRODUCT_STANDARDS={"redcar": [194.50, 84.96, 58.68]}
+    # redcar 값은 3D 코드(inspection/station_3d/config.py NOMINAL_MM)와 같은 값: 정상 차 5회 스캔 평균 (10-02)
+    # 길이(length) = 3D 코드의 depth(전폭). 판정 한계는 models.py 의 DIM_TOLERANCE_MM / DIM_RECHECK_MM
+    PRODUCT_STANDARDS: dict[str, list[float]] = {"redcar": [194.50, 84.96, 58.68]}
 
     @property
     def cors_origin_list(self) -> list[str]:

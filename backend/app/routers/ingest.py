@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..database import get_db
-from ..models import (DIM_TOLERANCE_MM, ProductDimensionInspection, ProductInspection,
+from ..models import (DIM_RECHECK_MM, DIM_TOLERANCE_MM, ProductDimensionInspection, ProductInspection,
                       StageResult, YoloStatus)
 from ..schemas import (ID_PATTERN, NAME_PATTERN, DimensionIn, InspectionDetailOut, InspectionUpsert,
                        PatchCoreIn, YoloCaptureIn, YoloCompleteIn)
@@ -106,7 +106,8 @@ def put_dimension(body: DimensionIn, inspection_id: str = InspectionId,
     insp.dimension_result = dim.dimension_result
     insp.scan_file_path = body.scan_file_path
     insp.dimension_data = {
-        "tolerance_mm": DIM_TOLERANCE_MM,
+        "tolerance_mm": DIM_TOLERANCE_MM,   # 축별 불량 한계
+        "recheck_mm": DIM_RECHECK_MM,       # 축별 정상(재검) 한계
         **{f"{a}_mm": getattr(dim, f"{a}_mm") for a in ("width", "length", "height")},
         **{f"standard_{a}_mm": getattr(dim, f"standard_{a}_mm") for a in ("width", "length", "height")},
         **{f"{a}_result": getattr(dim, f"{a}_result") for a in ("width", "length", "height")},

@@ -62,7 +62,9 @@ export default function InspectionDetail() {
   if (error) return <><BackLink /><div className="error">{error}</div></>;
   if (!insp) return <div className="center muted">불러오는 중...</div>;
   const d = insp.dimension;
-  const tol = insp.dimension_data?.tolerance_mm ?? 3;
+  // 축별 한계 (검사 당시 값, dimension_data 에 저장됨)
+  const tol = insp.dimension_data?.tolerance_mm;
+  const recheck = insp.dimension_data?.recheck_mm;
   const activeTypes = types.filter((t) => t.is_active);
 
   return (
@@ -94,27 +96,32 @@ export default function InspectionDetail() {
             <>
               <table className="mini">
                 <thead>
-                  <tr><th>축</th><th className="num">실측 (mm)</th><th className="num">기준 (mm)</th><th className="num">차이</th><th>합불</th></tr>
+                  <tr><th>축</th><th className="num">실측 (mm)</th><th className="num">기준 (mm)</th><th className="num">편차</th><th className="num">정상 / 불량 한계</th><th>판정</th></tr>
                 </thead>
                 <tbody>
                   {AXES.map(([k, label]) => {
                     const v = d[`${k}_mm`], s = d[`standard_${k}_mm`];
                     const diff = v != null && s != null ? v - s : null;
+                    const result = d[`${k}_result`];
                     return (
                       <tr key={k}>
                         <th>{label}</th>
                         <td className="num">{v ?? "-"}</td>
                         <td className="num">{s ?? "-"}</td>
-                        <td className={`num ${diff != null && Math.abs(diff) > tol ? "ng-text" : ""}`}>
+                        <td className={`num ${result === "FAIL" ? "ng-text" : ""}`}>
                           {diff != null ? `${diff > 0 ? "+" : ""}${diff.toFixed(2)}` : "-"}
                         </td>
-                        <td><StageBadge value={d[`${k}_result`]} /></td>
+                        <td className="num muted">±{limit(recheck, k)} / ±{limit(tol, k)}</td>
+                        <td><StageBadge value={result} /></td>
                       </tr>
                     );
                   })}
                 </tbody>
               </table>
-              <p className="muted small">허용오차 ±{tol}mm (경계값 포함). 3D 스캔: <span className="mono">{d.scan_file_path || "-"}</span></p>
+              <p className="muted small">
+                편차가 정상 한계 이내면 합격, 정상~불량 한계 사이면 재검(다시 스캔), 불량 한계를 넘으면 불합격 (경계값은 좋은 쪽).
+                3D 스캔: <span className="mono">{d.scan_file_path || "-"}</span>
+              </p>
             </>
           ) : (
             <p className="muted small">아직 치수 측정값이 없습니다.</p>
@@ -211,6 +218,12 @@ export default function InspectionDetail() {
       />
     </>
   );
+}
+
+/** 한계값: 축별 dict 면 그 축 값, 숫자면 그대로 (예전 데이터), 없으면 - */
+function limit(v, axis) {
+  if (v == null) return "-";
+  return typeof v === "object" ? v[axis] ?? "-" : v;
 }
 
 function BackLink() {

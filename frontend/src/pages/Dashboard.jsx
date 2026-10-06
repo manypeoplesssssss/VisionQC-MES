@@ -20,7 +20,7 @@ const REFRESH_MS = 30_000; // 자동 새로고침 간격 (ms)
 
 // 검사 흐름 카드: 단계별로 보여줄 상태와 이름
 const STAGES = [
-  { stage: "DIMENSION", name: "3D 치수", keys: ["PASS", "FAIL", "PENDING"], labels: STAGE_LABEL },
+  { stage: "DIMENSION", name: "3D 치수", keys: ["PASS", "RECHECK", "FAIL", "PENDING"], labels: STAGE_LABEL },
   { stage: "PATCHCORE", name: "PatchCore", keys: ["PASS", "FAIL", "PENDING"], labels: STAGE_LABEL },
   { stage: "YOLO", name: "YOLO 불량 분류", keys: ["COMPLETED", "IN_PROGRESS", "NOT_STARTED"], labels: YOLO_LABEL },
 ];

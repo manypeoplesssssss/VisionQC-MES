@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw
 
 from app.config import settings
 from app.database import Base, SessionLocal, engine
-from app.models import (AdminUser, DefectType, ProductDimensionInspection, ProductInspection, Role,
+from app.models import (DIM_RECHECK_MM, DIM_TOLERANCE_MM, AdminUser, DefectType, ProductDimensionInspection, ProductInspection, Role,
                         StageResult, YoloStatus)
 from app.security import hash_password
 from app.services.query import refresh_recommended
@@ -112,8 +112,10 @@ def add_inspection(db, ts, k, now):
         return
     std = settings.PRODUCT_STANDARDS[product]
     bad = random.random() < 0.05
-    vals = [round(s + random.gauss(0, 1.0) + (random.choice([-4, 4]) if bad and i == 0 else 0), 2)
-            for i, s in enumerate(std)]
+    # 축별 산포는 3D 코드의 정상 차 5회 스캔 표준편차 (전장 0.70 / 전폭 1.05 / 높이 0.64mm)
+    # → 가끔 재검(2σ 초과)이 나오고, 5% 는 가로를 일부러 4mm 틀리게 해서 불합격
+    vals = [round(s + random.gauss(0, sd) + (random.choice([-4, 4]) if bad and i == 0 else 0), 2)
+            for i, (s, sd) in enumerate(zip(std, (0.70, 1.05, 0.64)))]
     insp.dimension = ProductDimensionInspection(
         width_mm=vals[0], length_mm=vals[1], height_mm=vals[2],
         standard_width_mm=std[0], standard_length_mm=std[1], standard_height_mm=std[2],
@@ -123,7 +125,7 @@ def add_inspection(db, ts, k, now):
     dim = insp.dimension
     insp.dimension_result = dim.dimension_result
     insp.scan_file_path = dim.scan_file_path
-    insp.dimension_data = {"tolerance_mm": 3.0, "width_mm": vals[0], "length_mm": vals[1], "height_mm": vals[2],
+    insp.dimension_data = {"tolerance_mm": DIM_TOLERANCE_MM, "recheck_mm": DIM_RECHECK_MM, "width_mm": vals[0], "length_mm": vals[1], "height_mm": vals[2],
                            "standard_width_mm": std[0], "standard_length_mm": std[1], "standard_height_mm": std[2],
                            "width_result": dim.width_result, "length_result": dim.length_result,
                            "height_result": dim.height_result}

@@ -11,3 +11,4 @@ inspection/station_vision/captures/
 inspection/handoff/*
 !inspection/handoff/.gitkeep
 *.backup_*
+inspection/station_3d/scans/

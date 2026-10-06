@@ -6,7 +6,8 @@
 ```
 inspection/
 ├─ common/           공용 모듈. mes_client.py (MES 전송·재전송 큐), 예시, 테스트
-├─ station_3d/       3D 스캔 치수 검사 프로그램 (3D 환경 가상환경)       ← 3D 코드를 여기에
+├─ station_3d/       3D 스캔 치수 검사 코드 (3D 환경 가상환경) — 3D 담당 코드, 다른 작업에서 수정하지 않음
+├─ bridge_3d/        3D 측정 결과(measurement.json)를 읽어 MES 전송 + handoff 기록 (send_3d_to_mes.py)
 ├─ station_vision/   PatchCore → YOLO 검사 프로그램 (비전 환경 가상환경)
 │  ├─ inspection_app.py     버튼 화면 (턴테이블 + YOLO, MES 자동 전송)
 │  ├─ yolo_live.py          키보드로 조작하는 원래 검사 프로그램
@@ -21,12 +22,13 @@ inspection/
 그래서 프로그램과 가상환경을 둘로 나누고, MES 에서는 같은 검사번호(`inspection_id`) 한 줄로 이어 붙입니다.
 
 ```
-station_3d     검사 시작(start) + 치수(send_dimension) → handoff/ 에 검사번호 기록
+station_3d     스캔 → 병합 → 측정 (measurement.json)
+bridge_3d      검사 시작(start) + 치수(send_dimension) → handoff/ 에 검사번호 기록
    (환경 변경)
 station_vision handoff/ 의 검사번호를 읽어 → PatchCore(send_patchcore) → 불합격이면 YOLO 사진 → 완료
 ```
 최종 결과(정상/치수 불합격/공정 불량 …)는 MES 서버가 자동으로 계산합니다.
-※ station_3d 와 handoff 연결은 아직 뼈대 단계입니다 (station_3d/README.md).
+3D 쪽 실행 순서와 연결 방법은 [bridge_3d/README.md](bridge_3d/README.md) (station_3d 코드는 그대로 두고 bridge_3d 가 결과만 읽음). PatchCore 는 아직 연결 전이라 지금은 YOLO 결과만 붙습니다.
 
 ## 가상환경 만들기 (폴더마다 따로)
 ```powershell
@@ -34,7 +36,7 @@ cd inspection\station_vision
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-`station_3d` 도 같은 방법으로 (그 폴더의 requirements.txt).
+`station_3d` 도 같은 방법으로 가상환경을 만들고, 패키지는 `bridge_3d/requirements-3d.txt` 로 설치합니다.
 
 ## 실행
 ```powershell

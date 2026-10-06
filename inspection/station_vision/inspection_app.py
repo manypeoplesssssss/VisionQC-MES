@@ -20,6 +20,7 @@ MES 전송 (MES 는 검사 1회 = product_inspection 1행)
 없으면 아래 기본값을 쓴다. 화면에서도 바꿀 수 있다.
 """
 import argparse
+import json
 import queue
 import sys
 import threading
@@ -45,6 +46,26 @@ MES_URL = getattr(config, "MES_URL", "http://127.0.0.1:8000")
 MES_API_KEY = getattr(config, "MES_API_KEY", "change-this-ingest-key")
 MES_PRODUCT = getattr(config, "MES_PRODUCT", "redcar")   # 제품 모델명 (MES 의 product_name)
 VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
+# 3D 검사(bridge_3d/send_3d_to_mes.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
+HANDOFF = ROOT.parent / "handoff" / "latest.json"
+
+
+# ---------------------------------------------------------------- 3D → 비전 검사번호 이어받기
+def peek_handoff():
+    """아직 안 쓴 3D 검사 정보 (없거나 이미 썼으면 None)"""
+    try:
+        info = json.loads(HANDOFF.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return None if info.get("consumed") else info
+
+
+def consume_handoff(info):
+    """이어받았다고 표시 (임시 파일에 쓴 뒤 교체)"""
+    info = {**info, "consumed": True, "consumed_at": datetime.now().isoformat(timespec="seconds")}
+    tmp = HANDOFF.with_suffix(".tmp")
+    tmp.write_text(json.dumps(info, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(HANDOFF)
 
 
 # ---------------------------------------------------------------- 한글 경로용 사진 읽기
@@ -210,12 +231,23 @@ class Engine(threading.Thread):
                 camera.close()
             self.stopped.set()
 
-    def _begin_job(self, folder):
-        """한 바퀴 시작 → MES 에 검사 1회 생성. 설정은 이 순간 값으로 고정 (도중에 화면 값을 바꿔도 섞이지 않게)"""
+    def _begin_job(self, folder, handoff=None):
+        """한 바퀴 시작 → MES 에 검사 1회 생성. 설정은 이 순간 값으로 고정 (도중에 화면 값을 바꿔도 섞이지 않게)
+        handoff 가 있으면 3D 검사의 검사번호를 이어받아 같은 검사에 결과를 붙인다 (검사 시작 시각도 3D 측정 시각 유지)"""
         self.job = self.mes_settings()
-        self.job["inspection_id"] = f"{folder.parent.name}_{folder.name}"  # 날짜 포함 검사번호
-        self._submit("start", product_name=self.job["product"], product_serial=self.job["serial"] or None,
-                     capture_folder=str(folder), started_at=datetime.now().astimezone())
+        if handoff:
+            self.job["inspection_id"] = handoff["inspection_id"]
+            product = handoff.get("product_name") or self.job["product"]
+            serial = handoff.get("product_serial") or self.job["serial"] or None
+            started = datetime.fromisoformat(handoff["measured_at"])
+            consume_handoff(handoff)
+            self._log(f"3D 검사 이어받음: {handoff['inspection_id']}")
+        else:
+            self.job["inspection_id"] = f"{folder.parent.name}_{folder.name}"  # 날짜 포함 새 검사번호
+            product, serial, started = self.job["product"], self.job["serial"] or None, datetime.now().astimezone()
+        self._state(job=self.job["inspection_id"])
+        self._submit("start", product_name=product, product_serial=serial,
+                     capture_folder=str(folder), started_at=started)
 
     def _finish_job(self, captures):
         """한 바퀴 완료 → MES 에 YOLO 분류 완료"""
@@ -277,6 +309,14 @@ class Engine(threading.Thread):
                 if not live.ROI_NORMALIZED:
                     self._log("[검사 영역 설정]을 먼저 하세요")
                     continue
+                # 3D 검사에서 넘어온 검사번호가 있으면 이어받는다. 치수 불합격 제품은 비전 검사를 하지 않음
+                handoff = peek_handoff()
+                if handoff and handoff.get("dimension_result") == "FAIL":
+                    consume_handoff(handoff)
+                    self._log(f"3D 치수 불합격 제품({handoff['inspection_id']})이라 비전 검사를 하지 않습니다")
+                    continue
+                if handoff and handoff.get("dimension_result") == "RECHECK":
+                    self._log("주의: 3D 치수가 재검입니다. 다시 스캔하기 전까지 MES 최종 결과는 '치수 대기·재검'")
                 table.zero()
                 folder = live.new_inspection_folder()
                 captures, last_capture_angle, angle = 0, None, 0.0
@@ -285,7 +325,7 @@ class Engine(threading.Thread):
                 last_poll = 0.0
                 last_frame = time.monotonic()  # 시작 전 정지 영상으로 검출하지 않도록
                 self._log(f"한 바퀴 검사 시작: {folder.name}")
-                self._begin_job(folder)
+                self._begin_job(folder, handoff)
                 self._state(status="검사 중", angle=0.0, captures=0, verdict="-", folder=folder.name)
                 continue
             if not running:
@@ -387,9 +427,9 @@ class App:
         info = ttk.LabelFrame(side, text="상태", padding=8)
         info.pack(fill="x", pady=(8, 0))
         self.vars = {k: tk.StringVar(value=v) for k, v in
-                     dict(status="연결 중", angle="0.0°", captures="0", verdict="-", folder="-", pending="0").items()}
+                     dict(status="연결 중", angle="0.0°", captures="0", verdict="-", folder="-", job="-", pending="0").items()}
         for label, key in (("상태", "status"), ("각도", "angle"), ("결함 촬영", "captures"),
-                           ("판정", "verdict"), ("검사 폴더", "folder"), ("MES 대기", "pending")):
+                           ("판정", "verdict"), ("검사 폴더", "folder"), ("검사번호", "job"), ("MES 대기", "pending")):
             r = ttk.Frame(info)
             r.pack(fill="x")
             ttk.Label(r, text=label, width=9).pack(side="left")

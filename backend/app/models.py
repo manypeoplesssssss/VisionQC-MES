@@ -30,9 +30,16 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
 
-# 3D 치수 허용오차 (mm). 정확히 ±3mm 는 합격. 아래 SQL 식에 그대로 들어간다
-DIM_TOLERANCE_MM = 3.0
-# 소수점 계산 오차로 경계값(예: 33.1 - 30.1 = 3.0000000000000036)이 불합격되는 것 방지
+# 3D 치수 판정 한계 (mm, 축별). inspection/station_3d/config.py 의 판정 기준과 같은 값
+#   |편차| <= 재검 한계(RECHECK)      → PASS    정상
+#   재검 한계 < |편차| <= 불량 한계   → RECHECK 재검 (다시 스캔해서 재판정)
+#   |편차| > 불량 한계(TOLERANCE)    → FAIL    불합격
+# 한계값은 정상 차 5회 스캔 표준편차의 2배(재검)·3배(불량). length = 3D 코드의 depth(전폭)
+# 아래 SQL 식(생성 컬럼)에 숫자로 들어가므로, 바꾸면 sql/schema.sql 도 같이 바꾸고 기존 DB 는 컬럼 식을 다시 정의해야 한다
+DIM_TOLERANCE_MM = {"width": 2.5, "length": 3.5, "height": 2.0}   # 불량 한계 (3σ)
+DIM_RECHECK_MM = {"width": 1.5, "length": 2.0, "height": 1.5}     # 정상 한계 (2σ)
+AXES = ("width", "length", "height")
+# 소수점 계산 오차로 경계값(예: 33.1 - 30.1 = 3.0000000000000036)이 한 단계 나쁘게 나오는 것 방지
 _EPS = 1e-6
 
 
@@ -43,6 +50,7 @@ class StageResult(str, enum.Enum):
     """치수 · PatchCore 단계 판정"""
     PENDING = "PENDING"  # 대기 (아직 측정/검사 안 됨)
     PASS = "PASS"        # 합격
+    RECHECK = "RECHECK"  # 재검 (치수만: 정상 한계는 넘고 불량 한계 안쪽 → 다시 스캔)
     FAIL = "FAIL"        # 불합격
 
 
@@ -73,32 +81,39 @@ class Role(str, enum.Enum):
 # ---------------------------------------------------------------------------
 # 자동 계산 SQL 식 (MySQL 8.0.16+ / SQLite 3.31+ 둘 다 되는 표준 CASE 문)
 # ---------------------------------------------------------------------------
-def _axis_result_sql(axis: str) -> str:
-    """축 1개 합불: 실측이나 기준이 없으면 PENDING, |실측-기준| <= 3mm 면 PASS"""
-    return (f"CASE WHEN {axis}_mm IS NULL OR standard_{axis}_mm IS NULL THEN 'PENDING' "
-            f"WHEN ABS({axis}_mm - standard_{axis}_mm) <= {DIM_TOLERANCE_MM + _EPS} THEN 'PASS' "
-            f"ELSE 'FAIL' END")
-
-
-def _out_of_tol(axis: str) -> str:
-    return f"({axis}_mm IS NOT NULL AND standard_{axis}_mm IS NOT NULL AND ABS({axis}_mm - standard_{axis}_mm) > {DIM_TOLERANCE_MM + _EPS})"
+def _dev(axis: str) -> str:
+    return f"ABS({axis}_mm - standard_{axis}_mm)"
 
 
 def _missing(axis: str) -> str:
     return f"({axis}_mm IS NULL OR standard_{axis}_mm IS NULL)"
 
 
-# 종합: 하나라도 초과 → FAIL, (초과는 없고) 하나라도 누락 → PENDING, 나머지 PASS
+def _over(axis: str, limits: dict) -> str:
+    """측정값이 있고 |편차| 가 한계를 넘음"""
+    return f"(NOT {_missing(axis)} AND {_dev(axis)} > {limits[axis] + _EPS})"
+
+
+def _axis_result_sql(axis: str) -> str:
+    """축 1개: 실측이나 기준이 없으면 PENDING, 불량 한계 초과 FAIL, 재검 한계 초과 RECHECK, 나머지 PASS"""
+    return (f"CASE WHEN {_missing(axis)} THEN 'PENDING' "
+            f"WHEN {_dev(axis)} > {DIM_TOLERANCE_MM[axis] + _EPS} THEN 'FAIL' "
+            f"WHEN {_dev(axis)} > {DIM_RECHECK_MM[axis] + _EPS} THEN 'RECHECK' "
+            f"ELSE 'PASS' END")
+
+
+# 종합: 하나라도 FAIL → FAIL, (FAIL 없이) 하나라도 누락 → PENDING, 하나라도 RECHECK → RECHECK, 나머지 PASS
 _DIMENSION_RESULT_SQL = (
-    "CASE WHEN " + " OR ".join(_out_of_tol(a) for a in ("width", "length", "height")) + " THEN 'FAIL' "
-    "WHEN " + " OR ".join(_missing(a) for a in ("width", "length", "height")) + " THEN 'PENDING' "
+    "CASE WHEN " + " OR ".join(_over(a, DIM_TOLERANCE_MM) for a in AXES) + " THEN 'FAIL' "
+    "WHEN " + " OR ".join(_missing(a) for a in AXES) + " THEN 'PENDING' "
+    "WHEN " + " OR ".join(_over(a, DIM_RECHECK_MM) for a in AXES) + " THEN 'RECHECK' "
     "ELSE 'PASS' END"
 )
 
-# 최종 결과: 치수 → PatchCore → YOLO 순서로 내려가며 판단
+# 최종 결과: 치수 → PatchCore → YOLO 순서로 내려가며 판단 (치수 재검은 다시 스캔할 때까지 '치수 검사 대기')
 _FINAL_RESULT_SQL = (
     "CASE "
-    "WHEN dimension_result IS NULL OR dimension_result = 'PENDING' THEN 'DIMENSION_PENDING' "
+    "WHEN dimension_result IS NULL OR dimension_result IN ('PENDING', 'RECHECK') THEN 'DIMENSION_PENDING' "
     "WHEN dimension_result = 'FAIL' THEN 'DIMENSION_DEFECT' "
     "WHEN patchcore_result IS NULL OR patchcore_result = 'PENDING' THEN 'PATCHCORE_PENDING' "
     "WHEN patchcore_result = 'PASS' THEN 'NORMAL' "
