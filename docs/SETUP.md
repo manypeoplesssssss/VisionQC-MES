@@ -330,13 +330,17 @@ pytest -v
 
 ## 7. 검사 PC 연동
 
-검사 프로그램(3D 치수 / PatchCore / YOLO)이 결과를 MES 로 보내는 방법입니다.
+검사 프로그램(3D 치수 / PatchCore / YOLO)은 결과를 **DB(MySQL)에 직접 저장**하고, MES 서버와 화면은 **DB 에서 읽어서** 보여 줍니다.
+```
+검사 PC (inspection/) ──저장──▶ MySQL ◀──읽기── MES 서버 (backend/) ◀── 화면 (frontend/)
+          └─ 사진은 MES 사진 폴더(STORAGE_DIR)로 복사, DB 에는 경로만
+```
 
 ### 7-1. 검사 PC 에 폴더 복사
 저장소의 `inspection\` 폴더를 검사 PC 로 복사합니다 (MES 서버·화면 폴더는 필요 없음). 구성은 [inspection/README.md](../inspection/README.md).
-- `common\` : MES 전송 모듈 `mes_client.py` (두 검사 프로그램이 같이 씀)
+- `common\` : DB 저장 모듈 `db_client.py` (두 검사 프로그램이 같이 씀). `mes_client.py` 는 MES API 로 보내는 예전 방식(선택)
 - `station_3d\` : 3D 치수 검사 (3D 환경, 3D 담당 코드)
-- `bridge_3d\` : 3D 측정 결과를 MES 로 보내고 비전 검사로 검사번호를 넘기는 연결 프로그램
+- `bridge_3d\` : 3D 측정 결과를 DB 에 저장하고 비전 검사로 검사번호를 넘기는 연결 프로그램 (`save_3d_to_db.py`)
 - `station_vision\` : PatchCore → YOLO 검사, 턴테이블 버튼 화면 (비전 환경)
 
 ### 7-2. 패키지 설치 (검사 프로그램 폴더마다 가상환경 따로)
@@ -346,38 +350,45 @@ cd inspection\station_vision
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-MES 전송에 필요한 것은 `requests` 하나이고, 각 프로그램의 `requirements.txt` 에 들어 있습니다.
+DB 저장에 필요한 것은 `sqlalchemy`, `pymysql`, `cryptography` 이고, 각 프로그램의 `requirements.txt` 에 들어 있습니다.
 
-### 7-3. 코드에 붙이기
-MES 는 **검사 1회 = `product_inspection` 한 행**입니다. 같은 검사번호(`inspection_id`)로 단계별 결과를 채워 넣으면, 최종 결과는 서버 DB 가 자동으로 계산합니다.
+### 7-3. DB 주소와 사진 폴더
+| 설정 | 정하는 곳 (위가 우선) | 같은 PC 기본값 |
+|---|---|---|
+| DB 주소 | 버튼 화면 [DB 저장] 칸 / `station_vision/config.py` 의 `DB_URL` / 환경변수 `VISIONQC_DB_URL` / `backend/.env` 의 `DATABASE_URL` | `backend/.env` 와 같은 DB |
+| 사진 폴더 | 버튼 화면 / `config.py` 의 `STORAGE_DIR` | `backend/storage/images` (MES 의 `STORAGE_DIR`) |
+
+검사 PC 와 MES 서버가 **다른 PC** 면 DB 주소에 MES 서버 IP 를 넣고 (`mysql+pymysql://mes_user:mes_pass@192.168.0.10:3306/visionqc_mes?charset=utf8mb4`),
+사진 폴더는 MES 서버의 `STORAGE_DIR` 을 공유 폴더로 열어서 그 경로(`\\MES서버\images`)를 넣습니다. MySQL 은 다른 PC 접속을 허용해야 합니다 (`schema.sql` 의 `'mes_user'@'%'`).
+
+### 7-4. 코드에 붙이기
+DB 는 **검사 1회 = `product_inspection` 한 행**입니다. 같은 검사번호(`inspection_id`)로 단계별 결과를 채워 넣으면, 합격·재검·불합격과 최종 결과는 DB 가 자동으로 계산합니다.
+테이블은 MES 서버가 처음 뜰 때 만들므로, 검사 프로그램보다 MES 서버를 한 번 먼저 실행하세요.
 ```python
-from mes_client import MESClient, yolo_to_defects
+from db_client import DBClient, safety_ok
 
-mes = MESClient("http://<MES서버IP>:8000", api_key="<.env 의 INGEST_API_KEY>", model_version="v1.0")
-iid = "20261006_inspection_143000_001"                 # 검사번호 (날짜 포함 권장)
+db = DBClient()                                         # DB 주소·사진 폴더는 7-3 기본값 (직접 줘도 됨)
+iid = "20261006_inspection_143000_001"                  # 검사번호 (날짜 포함)
 
-mes.start(iid, "redcar", product_serial="RC-0001")      # 0) 검사 시작
-mes.send_dimension(iid, 40.1, 90.0, 30.2)                # 1) 3D 치수 (기준 치수는 서버 설정, standards=(가로,길이,높이) 로 직접 줘도 됨)
-mes.send_patchcore(iid, score=0.82, threshold=0.6)       # 2) PatchCore (점수 >= 기준 → 불합격)
-
-# 3) YOLO: 결함 사진 1장마다 (원본 + 표시 사진 + 결함 목록)
-result = model("c001.jpg")[0]
-mes.send_yolo_capture(iid, 1, "c001.jpg", "c001_annotated.jpg",
-                      defects=yolo_to_defects(result, conf_min=0.8), angle_deg=95.0)
-mes.complete_yolo(iid)                                   # 4) 한 바퀴 끝 → YOLO 분류 완료
+db.start(iid, "redcar", product_serial="RC-0001")       # 0) 검사 시작
+db.send_dimension(iid, 194.8, 85.0, 58.7, standards=(194.5, 84.96, 58.68),
+                  centering="OFF", interlock="0")        # 1) 3D 치수 + 측정 시점 장비 상태
+db.send_patchcore(iid, score=0.82, threshold=0.6)       # 2) PatchCore (점수 >= 기준 → 불합격)
+db.send_yolo_capture(iid, 1, "c001.jpg", "c001_annotated.jpg",   # 3) YOLO 결함 사진 1장마다
+                     defects=[{"defect_class": "scratch", "confidence": 0.91, "box": [120, 80, 180, 130]}],
+                     angle_deg=95.0)
+db.complete_yolo(iid)                                   # 4) 한 바퀴 끝 → YOLO 분류 완료
 ```
-전체 흐름 예시는 `inspection\common\example_pipeline.py`. 턴테이블 버튼 검사 프로그램(`inspection_app.py`)은 YOLO 단계를 이 방식으로 보냅니다.
+3D 쪽은 `bridge_3d/save_3d_to_db.py`, 턴테이블 버튼 검사 프로그램(`inspection_app.py`)은 YOLO 단계를 이 방식으로 저장합니다.
 
-장비 안전 (센터링 · 인터락): 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음.
+장비 안전 (센터링 · 인터락): 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, DB 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음.
 ```python
-from mes_client import safety_ok
-if not safety_ok(centering, interlock):           # 이 PC 에서 바로 판단 (서버 응답을 기다리지 않음)
+if not safety_ok(centering, interlock):           # 이 PC 에서 바로 판단 (저장을 기다리지 않음)
     stop_equipment()                              # 장비 정지 → 검사 보류
-mes.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기록, 이상이면 MES 가 알람 저장
-mes.send_dimension(iid, w, l, h, centering="OFF", interlock="0")    # 치수에 측정 시점 상태 같이 기록
+db.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기록, 이상이면 알람 행 추가
 ```
 센서가 아직 없어서 `inspection_app.py` 는 화면의 [장비 안전 상태]에서 작업자가 고른 값을 쓰고(기본 미확인 → 시작 불가),
-3D 쪽은 `bridge_3d/send_3d_to_mes.py --centering OFF --interlock 0` 으로 넘깁니다.
+3D 쪽은 `bridge_3d/save_3d_to_db.py --centering OFF --interlock 0` 으로 넘깁니다.
 
 | 최종 결과 (자동) | 뜻 |
 |---|---|
@@ -388,7 +399,7 @@ mes.send_dimension(iid, w, l, h, centering="OFF", interlock="0")    # 치수에 
 | `YOLO_PENDING` | PatchCore 불합격, YOLO 분류 대기 (사진이 들어오는 중이어도 완료 전이면 여기) |
 | `PROCESS_DEFECT` | PatchCore 불합격, YOLO 분류 완료 |
 
-### 7-4. 지켜야 할 값 규칙
+### 7-5. 지켜야 할 값 규칙
 | 값 | 규칙 | 예 |
 |---|---|---|
 | 검사번호 `inspection_id` | 영문/숫자/`_`/`-`, 64자 이하. **날짜를 넣어** 다른 날 검사와 겹치지 않게 | `20261006_inspection_143000_001` |
@@ -397,11 +408,12 @@ mes.send_dimension(iid, w, l, h, centering="OFF", interlock="0")    # 치수에 
 | 사진 | `.jpg` `.jpeg` `.png` `.bmp`, 20MB 이하 | |
 | 결함 박스 `box` | `[x1, y1, x2, y2]`, **원본 사진 픽셀 기준** | `[120, 80, 180, 130]` |
 | 신뢰도 `confidence` | 0 ~ 1 | `0.91` |
-| 기준 치수 | `bridge_3d` 가 3D `station_3d/config.py` 의 `NOMINAL_MM` 을 같이 보냄. 안 보내면 서버 `.env` 의 `PRODUCT_STANDARDS={"redcar": [가로, 길이, 높이]}` | `[194.50, 84.96, 58.68]` |
+| 기준 치수 | `bridge_3d` 가 3D `station_3d/config.py` 의 `NOMINAL_MM` 을 같이 저장 | `[194.50, 84.96, 58.68]` |
 | 판정 한계 | 가로 ±1.5 / ±2.5, 길이(전폭) ±2.0 / ±3.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계). 3D 코드 `TOLERANCE_MM` / `RECHECK_MM` 과 같은 값 | |
 
-### 7-5. 서버가 꺼져 있을 때
-`mes_queue\` 폴더에 요청(사진 복사본 포함)이 쌓이고, 다음 전송 때 보낸 순서 그대로 자동으로 다시 보냅니다. 시각 값은 처음 그대로 들어갑니다. 서버가 형식 오류로 거부한 건은 `mes_queue_failed\` 로 옮겨지니 가끔 확인하세요.
+### 7-6. DB 에 연결이 안 될 때
+`db_queue\` 폴더에 요청(사진 복사본 포함)이 쌓이고, 다음 저장 때 순서 그대로 자동으로 다시 저장합니다. 버튼 화면에는 "DB 대기 N" 과 경고가 보입니다.
+시각 값은 처음 그대로 들어갑니다. DB 가 거부한 건(사진 번호 중복 등)은 `db_queue_failed\` 로 옮겨지니 가끔 확인하세요.
 
 ---
 

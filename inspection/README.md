@@ -1,13 +1,15 @@
 # 검사 PC 프로그램 (inspection/)
 
+검사 결과는 **DB(MySQL)에 직접 저장**하고 MES 서버·화면은 DB 에서 읽습니다 (검사 PC → DB → MES). DB 주소·사진 폴더 설정은 [docs/SETUP.md 7-3](../docs/SETUP.md#7-3-db-주소와-사진-폴더).
+
 검사 라인 PC 에서 돌리는 프로그램 모음입니다. MES 서버(`backend/`)와 화면(`frontend/`)은 이 폴더 없이도 돌아가고,
 검사 PC 에는 이 폴더만 있으면 됩니다.
 
 ```
 inspection/
-├─ common/           공용 모듈. mes_client.py (MES 전송·재전송 큐), 예시, 테스트
+├─ common/           공용 모듈. db_client.py (DB 직접 저장·재저장 큐), mes_client.py (예전 MES API 방식), 테스트
 ├─ station_3d/       3D 스캔 치수 검사 코드 (3D 환경 가상환경) — 3D 담당 코드, 다른 작업에서 수정하지 않음
-├─ bridge_3d/        3D 측정 결과(measurement.json)를 읽어 MES 전송 + handoff 기록 (send_3d_to_mes.py)
+├─ bridge_3d/        3D 측정 결과(measurement.json)를 읽어 DB 저장 + handoff 기록 (save_3d_to_db.py)
 ├─ station_vision/   PatchCore → YOLO 검사 프로그램 (비전 환경 가상환경)
 │  ├─ inspection_app.py     버튼 화면 (턴테이블 + YOLO, MES 자동 전송)
 │  ├─ yolo_live.py          키보드로 조작하는 원래 검사 프로그램
@@ -52,5 +54,5 @@ MES 서버 주소·API 키·제품 모델명은 화면 오른쪽에서 바꾸거
 ## 테스트
 ```powershell
 cd inspection\common
-..\..\backend\.venv\Scripts\python.exe -m pytest -q     # mes_client (가짜 서버, MES 불필요)
+..\..\backend\.venv\Scripts\python.exe -m pytest -q     # db_client (임시 DB → MES API 로 확인), mes_client
 ```

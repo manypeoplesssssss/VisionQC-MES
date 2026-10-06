@@ -2,4 +2,7 @@
 # 각 검사 프로그램(station_3d, station_vision)의 requirements.txt 에도 requests 가 들어 있어서 따로 설치할 필요는 없다.
 # 개발 PC 에서는 install.bat 이 backend 가상환경에 같이 설치한다 (테스트용).
 requests>=2.31   # MES 서버로 사진 + 결과 전송 (필수)
+sqlalchemy>=2.0  # db_client.py: DB 직접 저장 (검사 프로그램 기본 방식)
+pymysql>=1.1     # MySQL 접속
+cryptography     # MySQL 8 인증 방식
 pytest>=8.0      # test_mes_client.py 실행용 (검사 PC 에서는 없어도 됨)

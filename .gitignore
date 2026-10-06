@@ -12,3 +12,5 @@ inspection/handoff/*
 !inspection/handoff/.gitkeep
 *.backup_*
 inspection/station_3d/scans/
+db_queue/
+db_queue_failed/

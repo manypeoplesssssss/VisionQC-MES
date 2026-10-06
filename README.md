@@ -9,7 +9,7 @@
 | Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0, Pydantic 2 |
 | DB | MySQL 8 |
 | 이미지 | 로컬 폴더 저장 + DB 에 파일명 기록 |
-| 검사 PC 연동 | `inspection/common/mes_client.py` (requests) |
+| 검사 PC 연동 | 검사 프로그램이 DB 에 직접 저장 (`inspection/common/db_client.py`), MES 는 DB 에서 읽기 |
 
 ## 목차
 - [바로 시작](#바로-시작)
@@ -257,7 +257,7 @@ VisionQC-MES/
 ├─ backend/        FastAPI 서버 (app/, tests/, sql/, seed.py)
 ├─ frontend/       React 화면 (src/pages, src/components, src/api)
 ├─ inspection/     검사 PC 프로그램
-│  ├─ common/         MES 전송 모듈 (mes_client.py)
+│  ├─ common/         DB 저장 모듈 (db_client.py)
 │  ├─ station_3d/     3D 치수 검사 (3D 환경)
 │  ├─ bridge_3d/      3D 결과 → MES · 비전 연결
 │  └─ station_vision/ PatchCore → YOLO, 턴테이블 버튼 화면 (비전 환경)

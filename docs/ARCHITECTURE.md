@@ -23,7 +23,8 @@
  │   ② 치수 합격이면 PatchCore → 이상 점수       │
  │   ③ PatchCore 불합격이면 YOLO → 결함 사진     │
  └───────┬────────────────────────────────────┘
-         │ mes_client.py (X-API-Key)
+         │ db_client.py — DB 에 직접 저장 (사진은 MES 사진 폴더로 복사)
+         │ (예전 방식: mes_client.py → 아래 HTTP API. 서버에 남아 있음)
          │ PUT  /api/inspections/{검사번호}              검사 시작
          │ PUT  /api/inspections/{검사번호}/dimension    치수
          │ PUT  /api/inspections/{검사번호}/patchcore    PatchCore
@@ -101,11 +102,13 @@ VisionQC-MES/
 │        └─ Account.jsx             /account
 ├─ inspection/                      검사 PC 프로그램 (자세히: inspection/README.md)
 │  ├─ common/                       공용
-│  │  ├─ mes_client.py              단계별 전송 모듈 (재전송 큐, YOLO 결과 변환)
+│  │  ├─ db_client.py               DB 직접 저장 모듈 (기본 방식, 재저장 큐)
+│  │  ├─ test_db_client.py          임시 DB 에 저장 → MES API 로 읽어 보는 테스트
+│  │  ├─ mes_client.py              MES API 로 보내는 예전 방식 (선택)
 │  │  ├─ test_mes_client.py         가짜 서버로 도는 테스트
 │  │  └─ example_pipeline.py        3단계 한 사이클 예시
 │  ├─ station_3d/                   3D 스캔 치수 검사 코드 (3D 담당, 수정하지 않음)
-│  ├─ bridge_3d/                    3D 측정 결과 → MES 전송 + handoff 기록 (send_3d_to_mes.py)
+│  ├─ bridge_3d/                    3D 측정 결과 → DB 저장 + handoff 기록 (save_3d_to_db.py)
 │  ├─ station_vision/               PatchCore → YOLO (비전 환경 가상환경)
 │  │  ├─ inspection_app.py          버튼 화면: 턴테이블 + YOLO + MES 자동 전송 (--sim 시뮬레이션)
 │  │  ├─ yolo_live.py               키보드 조작 검사 프로그램 (검사 영역, 촬영 로직)

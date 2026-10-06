@@ -8,3 +8,6 @@ opencv-python       # 사진 · 마스크 처리
 numpy
 pyserial            # 아두이노 턴테이블 시리얼 통신
 requests>=2.31      # MES 전송 (bridge_3d → ../common/mes_client.py)
+sqlalchemy>=2.0     # DB 직접 저장 (bridge_3d → ../common/db_client.py)
+pymysql>=1.1        # MySQL 접속
+cryptography        # MySQL 8 인증 방식

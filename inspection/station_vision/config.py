@@ -1,8 +1,10 @@
 """TAuto 아두이노 연결 설정. D435용 captures/config.py와 독립적으로 관리한다.
 
 turntable.py, yolo_live.py, inspection_app.py 가 import 해서 쓴다.
-MES 전송 설정(MES_URL, MES_API_KEY, MES_ITEM, MES_SERIAL_PREFIX)을 여기에 추가하면
-inspection_app.py 가 그 값을 기본값으로 쓴다 (없으면 inspection_app.py 안의 기본값).
+DB 저장 설정(DB_URL, STORAGE_DIR, PRODUCT)을 여기에 추가하면 inspection_app.py 가 그 값을 기본값으로 쓴다.
+없으면 backend/.env 의 DATABASE_URL 과 backend/storage/images (MES 와 같은 PC 일 때).
+  예) DB_URL = "mysql+pymysql://mes_user:mes_pass@192.168.0.10:3306/visionqc_mes?charset=utf8mb4"
+      STORAGE_DIR = "//MES서버/images"   (MES 서버의 사진 폴더를 공유한 경로)
 """
 
 # ---- 아두이노 시리얼 연결

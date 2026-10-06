@@ -7,5 +7,8 @@ opencv-python>=4.8    # 카메라, 사진 처리
 numpy>=1.24
 pillow>=10.0          # 버튼 화면에 영상 표시
 pyserial>=3.5         # 아두이노 턴테이블 시리얼 통신
-requests>=2.31        # MES 전송 (../common/mes_client.py)
+requests>=2.31        # (선택) MES API 로 보낼 때 ../common/mes_client.py
+sqlalchemy>=2.0       # DB 직접 저장 (../common/db_client.py)
+pymysql>=1.1          # MySQL 접속
+cryptography          # MySQL 8 인증 방식(caching_sha2_password)
 # PatchCore 패키지(anomalib 등)는 PatchCore 코드를 붙일 때 추가

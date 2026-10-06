@@ -2,22 +2,23 @@
 inspection_app.py — 버튼으로 조작하는 턴테이블 + YOLO 검사 프로그램
 
 yolo_live.py 의 검사 로직(검사 영역, YOLO 검출, 정지·재촬영, 사진 저장)을 그대로 쓰고
-키보드 대신 화면 버튼으로 조작한다. 검사 결과는 mes_client.py 로 MES 서버에 보낸다.
+키보드 대신 화면 버튼으로 조작한다. 검사 결과는 db_client.py 로 DB(MySQL)에 바로 저장하고,
+MES 서버와 화면은 DB 에서 읽어서 보여 준다 (검사 PC → DB → MES).
 
     python inspection_app.py          # 실제 카메라 + 턴테이블
     python inspection_app.py --sim    # 장비 없이 시험 (captures 사진을 카메라 대신 사용)
 
-MES 전송 (MES 는 검사 1회 = product_inspection 1행)
-    - 한 바퀴 검사 1회 = MES 검사 1회. 검사번호 = 날짜_검사폴더이름 (예: 20261006_inspection_143000_001)
-    - [검사 시작]  → 검사 행 생성 (제품 모델명, 제품 식별번호, 사진 폴더)
-    - 결함 사진 저장 → 원본 + 표시 사진 + 결함 목록 (yolo_defect_data, image_files 에 추가)
+DB 저장 (검사 1회 = product_inspection 1행)
+    - 한 바퀴 검사 1회 = DB 검사 1행. 검사번호 = 날짜_검사폴더이름 (예: 20261006_inspection_143000_001)
+      3D 검사가 handoff 에 남긴 검사번호가 있으면 그 행을 이어받는다
+    - [검사 시작]  → 검사 행 생성 (제품 모델명, 제품 번호, 사진 폴더)
+    - 결함 사진 저장 → 원본 + 표시 사진을 MES 사진 폴더로 복사, 결함 목록과 경로를 DB 에 추가
     - 한 바퀴 완료  → YOLO 분류 완료 (yolo_status = COMPLETED)
-    - 수동 정지로 중간에 끝낸 검사는 완료를 보내지 않는다 (YOLO 진행 중으로 남음)
-    - 서버가 꺼져 있으면 mes_queue 폴더에 쌓아 두었다가 다음 전송 때 순서대로 다시 보낸다
-    최종 결과(final_result)는 MES 가 3D 치수 → PatchCore → YOLO 결과로 자동 계산한다.
-    이 프로그램은 YOLO 단계만 보내므로, 3D 치수·PatchCore 결과가 들어오기 전까지는 '치수 검사 대기'로 보인다.
-설정값(MES_URL, MES_API_KEY, MES_PRODUCT)은 config.py 에 적으면 그 값을 쓰고,
-없으면 아래 기본값을 쓴다. 화면에서도 바꿀 수 있다.
+    - 수동 정지로 중간에 끝낸 검사는 완료를 저장하지 않는다 (YOLO 진행 중으로 남음)
+    - DB 에 연결이 안 되면 db_queue 폴더에 쌓아 두었다가 순서대로 다시 저장하고, 화면에 경고를 띄운다
+    최종 결과(final_result)는 DB 가 3D 치수 → PatchCore → YOLO 결과로 자동 계산한다.
+DB 주소·사진 폴더는 화면에서 바꾸거나 config.py 에 DB_URL, STORAGE_DIR, PRODUCT 를 적는다.
+없으면 backend/.env 의 DATABASE_URL 과 backend/storage/images 를 쓴다 (MES 와 같은 PC 일 때).
 """
 import argparse
 import json
@@ -35,18 +36,18 @@ import numpy as np
 from PIL import Image, ImageTk
 
 ROOT = Path(__file__).resolve().parent
-# 공용 모듈(inspection/common/mes_client.py)을 import 할 수 있게 경로 추가
+# 공용 모듈(inspection/common/db_client.py)을 import 할 수 있게 경로 추가
 sys.path.insert(0, str(ROOT.parent / "common"))
 
 import config  # noqa: E402
 import yolo_live as live  # noqa: E402
-from mes_client import MESClient, MESError, safety_ok  # noqa: E402
+from db_client import DEFAULT_STORAGE_DIR, DBClient, DBError, default_db_url, safety_ok  # noqa: E402
 
-MES_URL = getattr(config, "MES_URL", "http://127.0.0.1:8000")
-MES_API_KEY = getattr(config, "MES_API_KEY", "change-this-ingest-key")
-MES_PRODUCT = getattr(config, "MES_PRODUCT", "redcar")   # 제품 모델명 (MES 의 product_name)
+DB_URL = getattr(config, "DB_URL", None) or default_db_url()                    # MES 와 같은 DB
+STORAGE_DIR = str(getattr(config, "STORAGE_DIR", None) or DEFAULT_STORAGE_DIR)     # MES 가 사진을 읽는 폴더
+PRODUCT = getattr(config, "PRODUCT", getattr(config, "MES_PRODUCT", "redcar"))     # 제품 모델명 (product_name)
 VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
-# 3D 검사(bridge_3d/send_3d_to_mes.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
+# 3D 검사(bridge_3d/save_3d_to_db.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
 HANDOFF = ROOT.parent / "handoff" / "latest.json"
 # 장비 안전 상태 표시 이름. 검사 허용: 센터링 OFF(정위치) + 인터락 0(정상)
 CENTERING_KO = {"OFF": "정위치", "ON": "위치 이상", "UNKNOWN": "미확인"}
@@ -135,9 +136,9 @@ class SimCamera:
         pass
 
 
-# ---------------------------------------------------------------- MES 전송 (별도 스레드)
+# ---------------------------------------------------------------- DB 저장 (별도 스레드)
 class Sender(threading.Thread):
-    """검사 루프가 전송 때문에 멈추지 않도록 MES 전송은 이 스레드가 한다"""
+    """검사 루프가 저장 때문에 멈추지 않도록 DB 저장은 이 스레드가 한다"""
     def __init__(self, events):
         super().__init__(daemon=True)
         self.jobs = queue.Queue()
@@ -145,34 +146,34 @@ class Sender(threading.Thread):
         self.client = None
         self.client_key = None
 
-    def submit(self, url, api_key, action, **kwargs):
-        """action: MESClient 메서드 이름 (start / send_yolo_capture / complete_yolo)"""
-        self.jobs.put((url, api_key, action, kwargs))
+    def submit(self, db_url, storage_dir, action, **kwargs):
+        """action: DBClient 메서드 이름 (start / send_yolo_capture / complete_yolo / check_safety)"""
+        self.jobs.put((db_url, storage_dir, action, kwargs))
 
     def run(self):
         while True:
-            url, api_key, action, kwargs = self.jobs.get()
+            db_url, storage_dir, action, kwargs = self.jobs.get()
             try:
-                if self.client_key != (url, api_key):
+                if self.client_key != (db_url, storage_dir):
                     product_names = self.client.product_name if self.client else {}
-                    self.client = MESClient(url, api_key, queue_dir=ROOT / "mes_queue")
+                    self.client = DBClient(db_url, storage_dir, queue_dir=ROOT / "db_queue")
                     self.client.product_name.update(product_names)  # 진행 중인 검사의 제품명 유지
-                    self.client_key = (url, api_key)
+                    self.client_key = (db_url, storage_dir)
                 res = getattr(self.client, action)(**kwargs)
                 what = {"start": "검사 시작", "send_yolo_capture": f"결함 사진 {kwargs.get('capture_number')}",
                         "complete_yolo": "YOLO 완료", "check_safety": "안전 상태"}[action]
                 if res is None:
-                    self.events.put(("log", f"MES 연결 실패 → 대기열에 저장 ({self.client.pending()}건 대기)"))
+                    self.events.put(("log", f"DB 연결 실패 → 대기열에 저장 ({self.client.pending()}건). DB 를 확인하세요"))
                 elif action == "check_safety":
                     n = len(res.get("alarms", []))
-                    self.events.put(("log", "MES 안전 상태 기록: " + ("정상" if res.get("allowed") else f"이상 → 알람 {n}건 기록")))
+                    self.events.put(("log", "DB 안전 상태 기록: " + ("정상" if res.get("allowed") else f"이상 → 알람 {n}건 기록")))
                 else:
-                    self.events.put(("log", f"MES 전송 완료: {what} → {res.get('final_result')}"))
+                    self.events.put(("log", f"DB 저장 완료: {what} → {res.get('final_result')}"))
                 self.events.put(("pending", self.client.pending()))
-            except MESError as exc:
-                self.events.put(("log", f"MES 가 거부함: {exc}"))
+            except DBError as exc:
+                self.events.put(("log", f"DB 가 거부함: {exc}"))
             except Exception as exc:  # 전송 오류가 검사 프로그램을 멈추지 않게
-                self.events.put(("log", f"MES 전송 오류: {exc}"))
+                self.events.put(("log", f"DB 저장 오류: {exc}"))
 
 
 # ---------------------------------------------------------------- 검사 루프 (별도 스레드)
@@ -241,7 +242,7 @@ class Engine(threading.Thread):
             self.stopped.set()
 
     def _begin_job(self, folder, handoff=None):
-        """한 바퀴 시작 → MES 에 검사 1회 생성. 설정은 이 순간 값으로 고정 (도중에 화면 값을 바꿔도 섞이지 않게)
+        """한 바퀴 시작 → DB 에 검사 1회 생성. 설정은 이 순간 값으로 고정 (도중에 화면 값을 바꿔도 섞이지 않게)
         handoff 가 있으면 3D 검사의 검사번호를 이어받아 같은 검사에 결과를 붙인다 (검사 시작 시각도 3D 측정 시각 유지)"""
         self.job = self.mes_settings()
         if handoff:
@@ -259,25 +260,23 @@ class Engine(threading.Thread):
                      capture_folder=str(folder), started_at=started)
 
     def _finish_job(self, captures):
-        """한 바퀴 완료 → MES 에 YOLO 분류 완료"""
+        """한 바퀴 완료 → DB 에 YOLO 분류 완료"""
         verdict = "FAIL" if captures else "PASS"
         self._log(f"한 바퀴 검사 완료: {verdict} / 촬영 {captures}회")
         self._state(status="완료", verdict=verdict)
         self._submit("complete_yolo")
 
     def _submit_safety(self, stage, centering, interlock, inspection_id=None, message=None):
-        """장비 안전 상태를 MES 에 기록 (이상이면 MES 가 알람 저장). 검사 전이라 job 이 없어도 보낸다"""
+        """장비 안전 상태를 DB 에 기록 (이상이면 알람 행 추가). 검사 전이라 job 이 없어도 저장한다"""
         settings = self.mes_settings()
-        if not settings["enabled"]:
-            return
-        self.sender.submit(settings["url"], settings["api_key"], "check_safety", stage=stage,
+        self.sender.submit(settings["db_url"], settings["storage_dir"], "check_safety", stage=stage,
                            centering=centering, interlock=interlock, inspection_id=inspection_id, message=message)
 
     def _submit(self, action, **kwargs):
         job = getattr(self, "job", None)
-        if not job or not job["enabled"]:
+        if not job:
             return
-        self.sender.submit(job["url"], job["api_key"], action, inspection_id=job["inspection_id"], **kwargs)
+        self.sender.submit(job["db_url"], job["storage_dir"], action, inspection_id=job["inspection_id"], **kwargs)
 
     def _submit_capture(self, folder, number, found, angle):
         """결함 사진 1장: 원본 + 표시 사진 + 결함 목록"""
@@ -314,7 +313,7 @@ class Engine(threading.Thread):
                 if running:
                     table.stop()
                     running = False
-                    self._log("검사 수동 정지 (이 검사는 MES 에 YOLO 완료를 보내지 않음)")
+                    self._log("검사 수동 정지 (이 검사는 DB 에 YOLO 완료를 저장하지 않음)")
                 self._state(status="정지", angle=table.position_deg)
                 continue
             if command == "roi":
@@ -337,8 +336,8 @@ class Engine(threading.Thread):
                     self._log(f"3D 치수 불합격 제품({handoff['inspection_id']})이라 비전 검사를 하지 않습니다")
                     continue
                 if handoff and handoff.get("dimension_result") == "RECHECK":
-                    self._log("주의: 3D 치수가 재검입니다. 다시 스캔하기 전까지 MES 최종 결과는 '치수 대기·재검'")
-                # 장비 안전 사전 확인: 센터링 OFF + 인터락 0 이 아니면 시작하지 않고 MES 에 알람 기록
+                    self._log("주의: 3D 치수가 재검입니다. 다시 스캔하기 전까지 최종 결과는 '치수 대기·재검'")
+                # 장비 안전 사전 확인: 센터링 OFF + 인터락 0 이 아니면 시작하지 않고 DB 에 알람 기록
                 centering, interlock = self.safety()
                 if not safety_ok(centering, interlock):
                     self._log(f"검사 금지: 센터링 {CENTERING_KO.get(centering, centering)} / "
@@ -392,7 +391,7 @@ class Engine(threading.Thread):
                 confirmed = live.capture_defects(stopped_result)
                 if confirmed:
                     captures += 1
-                    # 원본, 표시 사진, json 저장 (yolo_live 와 같은 파일 구성). MES 에는 원본과 표시 사진을 보낸다
+                    # 원본, 표시 사진, json 저장 (yolo_live 와 같은 파일 구성). DB 저장 때 원본과 표시 사진을 MES 사진 폴더로 복사
                     live.save_capture(stopped_frame, stopped_result, table.position_deg, folder, captures)
                     self._log(f"결함 촬영 {captures}: " + ", ".join(
                         f"{d['class']} {d['confidence']:.2f}" for d in confirmed))
@@ -471,14 +470,14 @@ class App:
         self.vars = {k: tk.StringVar(value=v) for k, v in
                      dict(status="연결 중", angle="0.0°", captures="0", verdict="-", folder="-", job="-", pending="0").items()}
         for label, key in (("상태", "status"), ("각도", "angle"), ("결함 촬영", "captures"),
-                           ("판정", "verdict"), ("검사 폴더", "folder"), ("검사번호", "job"), ("MES 대기", "pending")):
+                           ("판정", "verdict"), ("검사 폴더", "folder"), ("검사번호", "job"), ("DB 대기", "pending")):
             r = ttk.Frame(info)
             r.pack(fill="x")
             ttk.Label(r, text=label, width=9).pack(side="left")
             ttk.Label(r, textvariable=self.vars[key]).pack(side="left")
 
         # 장비 안전 상태: 센서가 아직 없어서 작업자가 확인 후 고른다. 미확인이면 검사를 시작할 수 없다.
-        # (검사 중에 이상으로 바꾸면 즉시 정지·보류되고 MES 에 알람이 남는다)
+        # (검사 중에 이상으로 바꾸면 즉시 정지·보류되고 DB 에 알람이 남는다)
         safe = ttk.LabelFrame(side, text="장비 안전 상태", padding=8)
         safe.pack(fill="x", pady=(8, 0))
         self.safety_vars = {}
@@ -498,20 +497,17 @@ class App:
         ttk.Label(safe, text="센터링 OFF + 인터락 0 일 때만 검사", foreground="#6b7686").pack(anchor="w", pady=(4, 0))
         self._read_safety()
 
-        mes = ttk.LabelFrame(side, text="MES 전송", padding=8)
+        mes = ttk.LabelFrame(side, text="DB 저장 (MES 는 DB 에서 읽음)", padding=8)
         mes.pack(fill="x", pady=(8, 0))
-        self.mes_enabled = tk.BooleanVar(value=True)
-        ttk.Checkbutton(mes, text="검사 결과를 MES 로 보내기", variable=self.mes_enabled,
-                        command=self._read_mes_fields).pack(anchor="w")
         self.mes_vars = {}
-        for label, key, value in (("서버", "url", MES_URL), ("API 키", "api_key", MES_API_KEY),
-                                  ("제품 모델", "product", MES_PRODUCT), ("제품 번호", "serial", "")):
+        for label, key, value in (("DB 주소", "db_url", DB_URL), ("사진 폴더", "storage_dir", STORAGE_DIR),
+                                  ("제품 모델", "product", PRODUCT), ("제품 번호", "serial", "")):
             r = ttk.Frame(mes)
             r.pack(fill="x", pady=1)
             ttk.Label(r, text=label, width=9).pack(side="left")
             var = tk.StringVar(value=value)
             var.trace_add("write", lambda *_: self._read_mes_fields())
-            ttk.Entry(r, textvariable=var, width=26, show="*" if key == "api_key" else "").pack(side="left")
+            ttk.Entry(r, textvariable=var, width=26).pack(side="left")
             self.mes_vars[key] = var
 
         logbox = ttk.LabelFrame(main, text="기록", padding=4)
@@ -519,11 +515,9 @@ class App:
         self.log = tk.Listbox(logbox, height=8)
         self.log.pack(fill="both", expand=True)
 
-    # ---- MES 설정 (Tk 변수는 화면 스레드에서만 읽고, 검사 스레드에는 복사본을 준다)
+    # ---- DB 저장 설정 (Tk 변수는 화면 스레드에서만 읽고, 검사 스레드에는 복사본을 준다)
     def _read_mes_fields(self):
-        values = {k: v.get().strip() for k, v in getattr(self, "mes_vars", {}).items()}
-        values["enabled"] = self.mes_enabled.get() if hasattr(self, "mes_enabled") else True
-        self._mes_cache = values
+        self._mes_cache = {k: v.get().strip() for k, v in getattr(self, "mes_vars", {}).items()}
 
     def mes_settings(self):
         return dict(self._mes_cache)
