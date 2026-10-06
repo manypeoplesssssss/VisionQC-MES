@@ -271,6 +271,7 @@ VisionQC-MES/
 | 문서 | 내용 |
 |---|---|
 | **[docs/SETUP.md](docs/SETUP.md)** | 설치·구동 방법 (Windows 기준 단계별), 검사 PC 연동, 다른 PC 접속, Docker, 문제 해결 |
+| **[docs/RUN_AFTER_REBOOT.md](docs/RUN_AFTER_REBOOT.md)** | PC 를 다시 켠 뒤 터미널로 MES 서버·화면·검사 프로그램 실행하는 순서 |
 | **[docs/DB_REMOTE_ACCESS.md](docs/DB_REMOTE_ACCESS.md)** | 다른 PC 에서 MySQL(DB) 접속하기 — 접속 정보, 계정·방화벽 설정, 검사 PC 연결, 문제 해결 |
 | **[docs/PACKAGES.md](docs/PACKAGES.md)** | 사용하는 패키지 전체 목록 — 무엇이고, 어디서, 왜 쓰는지 |
 | **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** | 폴더·파일 역할, DB 설계, 판정 규칙, REST API 명세, 보안, 기능 추가하는 법 |
