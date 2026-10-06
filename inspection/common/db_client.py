@@ -94,6 +94,11 @@ def _local(dt: datetime | None) -> datetime:
     return dt.astimezone().replace(tzinfo=None) if dt.tzinfo else dt
 
 
+def _num(v):
+    """DB 숫자 → float (MySQL DOUBLE 은 Decimal 로 읽힐 수 있어 JSON 에 못 넣음)"""
+    return None if v is None else float(v)
+
+
 def _json(v, default):
     """JSON 컬럼 값 → 파이썬 (DB 종류에 따라 문자열로 올 수도 있음)"""
     if v is None:
@@ -247,8 +252,8 @@ class DBClient:
         d = conn.execute(select(dim).where(dim.c.inspection_id == iid)).mappings().first()  # DB 가 계산한 판정
         self._update(conn, iid, dimension_result=d["dimension_result"], scan_file_path=a.get("scan_file_path"),
                      dimension_data={"tolerance_mm": DIM_TOLERANCE_MM, "recheck_mm": DIM_RECHECK_MM,
-                                     **{f"{x}_mm": d[f"{x}_mm"] for x in AXES},
-                                     **{f"standard_{x}_mm": d[f"standard_{x}_mm"] for x in AXES},
+                                     **{f"{x}_mm": _num(d[f"{x}_mm"]) for x in AXES},
+                                     **{f"standard_{x}_mm": _num(d[f"standard_{x}_mm"]) for x in AXES},
                                      **{f"{x}_result": d[f"{x}_result"] for x in AXES}})
         self._record_safety(conn, iid, "DIMENSION", a["centering"], a["interlock"], "치수 측정 시점 상태")
         return self._summary(conn, iid)
