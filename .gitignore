@@ -19,3 +19,4 @@ db_queue_failed/
 inspection/visionPatchCore/patchcore_export/models/
 inspection/visionPatchCore/patchcore_export/data/
 inspection/visionPatchCore/patchcore_export/results/
+inspection/station_3d/**/scans/
