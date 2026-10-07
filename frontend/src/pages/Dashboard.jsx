@@ -3,7 +3,7 @@
  *
  * 화면 구성 (위 → 아래)
  *   KPI 5개      : 검사 / 정상 / 불량 / 대기 / 불량률   (검사 1회 = product_inspection 1행)
- *   검사 흐름    : 3D 치수 → YOLO 단계별 상태 건수. 누르면 해당 최종 결과로 검사 조회
+ *   검사 흐름    : 3D 치수 → PatchCore → YOLO 단계별 상태 건수. 누르면 해당 최종 결과로 검사 조회
  *   차트 2개     : 시간대별 검사 수 / 최근 14일 검사 수 (불량 표시)
  *   최종 결과별 · 불량 코드(D01~D05) · YOLO 결함 종류
  *   최근 불량    : 누르면 검사 상세로 이동
@@ -21,6 +21,7 @@ const REFRESH_MS = 30_000; // 자동 새로고침 간격 (ms)
 // 검사 흐름 카드: 단계별로 보여줄 상태와 이름
 const STAGES = [
   { stage: "DIMENSION", name: "3D 치수", keys: ["PASS", "RECHECK", "FAIL", "PENDING"], labels: STAGE_LABEL },
+  { stage: "PATCHCORE", name: "PatchCore", keys: ["PASS", "FAIL", "PENDING"], labels: STAGE_LABEL },
   { stage: "YOLO", name: "YOLO 불량 분류", keys: ["COMPLETED", "IN_PROGRESS", "NOT_STARTED"], labels: YOLO_LABEL },
 ];
 const TONE = { PASS: "ok-text", FAIL: "ng-text", COMPLETED: "ok-text" };
@@ -85,9 +86,9 @@ export default function Dashboard() {
           )}
           <section className="kpis">
             <Kpi label="검사" value={summary.total} sub="검사 1회 = 1건" />
-            <Kpi label="정상" value={summary.normal} tone="ok" sub="치수 합격 + YOLO 결함 없음" />
-            <Kpi label="불량" value={summary.defect} tone="ng" sub="치수 불합격 또는 YOLO 결함" />
-            <Kpi label="대기" value={summary.pending} tone="wip" sub={`치수·YOLO 검사 전 · 안전 알람 ${summary.alarms_today}건`} />
+            <Kpi label="정상" value={summary.normal} tone="ok" sub="치수·PatchCore 합격" />
+            <Kpi label="불량" value={summary.defect} tone="ng" sub="치수 또는 PatchCore 불합격" />
+            <Kpi label="대기" value={summary.pending} tone="wip" sub={`치수·PatchCore 검사 전 · 안전 알람 ${summary.alarms_today}건`} />
             <Kpi label="불량률" value={`${summary.defect_rate}%`} tone={summary.defect_rate >= 5 ? "ng" : ""} sub="판정 끝난 검사 기준" />
           </section>
 

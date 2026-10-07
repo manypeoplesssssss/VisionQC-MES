@@ -23,12 +23,12 @@ import numpy as np
 from ultralytics import YOLO
 from ultralytics.engine.results import Results
 import config
+from preprocessing import crop_roi, roi_bounds, validate_frame, input_description
 from turntable import Turntable
 
 # ---------------------------------------------------------------- 설정값
 ROOT = Path(__file__).resolve().parent          # 이 파일이 있는 폴더 (best.pt, captures 기준 위치)
 DEFECT_CLASSES = {"scratch", "white_paint"}     # 결함으로 취급할 YOLO 클래스 이름
-ROI_FILE = ROOT / "inspection_roi.json"         # 마우스로 지정한 검사 영역 저장 파일
 WINDOW = "VisionQC"                             # 검사 화면 창 이름
 ROI_NORMALIZED = []                             # 현재 검사 영역 꼭짓점 (0~1 비율 좌표). 실행 중에 채워진다
 CAPTURE_INTERVAL_DEG = 8.0  # 직전 촬영 위치에서 이 각도 이상 이동하면 재촬영 허용
@@ -49,161 +49,43 @@ def capture_allowed(angle, last_capture_angle):
     return last_capture_angle is None or angle - last_capture_angle >= CAPTURE_INTERVAL_DEG
 
 
-def validate_roi(points):
-    """검사 영역 꼭짓점 목록이 올바른 다각형인지 확인하고 리스트로 돌려준다.
-    점 3개 이상, 0~1 범위, 중복 점 없음, 변끼리 교차 없음, 너무 작지 않음. 문제가 있으면 ValueError"""
-    polygon = np.asarray(points, dtype=np.float32)
-    if polygon.ndim != 2 or polygon.shape[1] != 2 or len(polygon) < 3:
-        raise ValueError("검사 영역은 점 3개 이상 필요합니다")
-    if not np.isfinite(polygon).all() or (polygon < 0).any() or (polygon > 1).any():
-        raise ValueError("검사 영역 좌표가 잘못되었습니다")
-    if len(np.unique(polygon, axis=0)) != len(polygon):
-        raise ValueError("같은 위치를 중복해서 선택했습니다")
-    def cross(a, b, c):
-        # 벡터 ab 와 ac 의 외적 (부호로 c 가 선분 ab 의 어느 쪽에 있는지 판단)
-        return float((b[0]-a[0])*(c[1]-a[1]) - (b[1]-a[1])*(c[0]-a[0]))
-    def on_segment(a, b, p):
-        # p 가 선분 ab 를 감싸는 사각형 안에 있는지 (일직선 위에 있을 때 접촉 판정용)
-        return (min(a[0], b[0]) <= p[0] <= max(a[0], b[0]) and
-                min(a[1], b[1]) <= p[1] <= max(a[1], b[1]))
-    # 이웃하지 않는 두 변이 교차하거나 맞닿으면 꼬인 다각형이므로 거부
-    n = len(polygon)
-    for i in range(n):
-        a, b = polygon[i], polygon[(i + 1) % n]
-        for j in range(i + 1, n):
-            if j == i + 1 or (i == 0 and j == n - 1):
-                continue  # 꼭짓점을 공유하는 이웃 변은 검사하지 않음
-            c, d = polygon[j], polygon[(j + 1) % n]
-            ab_c, ab_d = cross(a, b, c), cross(a, b, d)
-            cd_a, cd_b = cross(c, d, a), cross(c, d, b)
-            intersects = (ab_c * ab_d < 0 and cd_a * cd_b < 0)
-            touches = ((abs(ab_c) < 1e-8 and on_segment(a, b, c)) or
-                       (abs(ab_d) < 1e-8 and on_segment(a, b, d)) or
-                       (abs(cd_a) < 1e-8 and on_segment(c, d, a)) or
-                       (abs(cd_b) < 1e-8 and on_segment(c, d, b)))
-            if intersects or touches:
-                raise ValueError("경계가 겹칩니다. 가장자리를 순서대로 선택하세요")
-    if abs(cv2.contourArea(polygon)) < 0.001:
-        raise ValueError("검사 영역이 너무 작습니다")
-    return polygon.tolist()
-
-
 def load_roi(frame):
-    """저장된 검사 영역을 불러온다. 파일이 없거나, 망가졌거나, 영상 비율이 바뀌었으면 [] (다시 지정 필요)"""
-    if not ROI_FILE.exists():
-        return []
-    try:
-        saved = json.loads(ROI_FILE.read_text(encoding="utf-8"))
-        points = validate_roi(saved["points"])
-        height, width = frame.shape[:2]
-        if abs(saved["aspect_ratio"] - width / height) > 0.02:
-            print("영상 비율이 바뀌었습니다. 검사 영역을 다시 지정하세요.")
-            return []
-        return points
-    except (ValueError, KeyError, TypeError, OSError) as exc:
-        print(f"검사 영역 설정을 불러오지 못했습니다: {exc}")
-        return []
-
-
-def save_roi(points, frame):
-    """검사 영역을 영상 비율과 함께 저장. 임시 파일에 쓴 뒤 교체해서 저장 중 꺼져도 파일이 망가지지 않게 한다"""
-    height, width = frame.shape[:2]
-    payload = {"version": 1, "points": validate_roi(points),
-               "aspect_ratio": width / height}
-    temporary = ROI_FILE.with_suffix(".tmp")
-    temporary.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-    temporary.replace(ROI_FILE)
+    """Use only the training pixel ROI from config; legacy polygon JSON is ignored."""
+    validate_frame(frame)
+    x, y, w, h = roi_bounds()
+    return [[px / (frame.shape[1] - 1), py / (frame.shape[0] - 1)]
+            for px, py in ((x, y), (x + w - 1, y),
+                           (x + w - 1, y + h - 1), (x, y + h - 1))]
 
 
 def select_roi(frame):
-    """정지 상태의 영상을 사용. 취소하면 기존 설정을 유지한다.
-    별도 창에서 마우스로 꼭짓점을 찍어 검사 영역을 지정한다. 저장하면 꼭짓점 목록, 취소하면 None"""
-    height, width = frame.shape[:2]
-    # 큰 영상은 화면에 들어가도록 줄여서 보여 준다 (좌표는 0~1 비율로 저장하므로 크기와 무관)
-    scale = min(1.0, 1100 / width, 750 / height)
-    preview = cv2.resize(frame, (round(width * scale), round(height * scale)))
-    ph, pw = preview.shape[:2]
-    points = []
-    message = "Click around the target | Right click: undo | Enter: save | Esc: cancel"
-    def mouse(event, x, y, flags, param):
-        # 왼쪽 클릭: 점 추가 / 오른쪽 클릭: 마지막 점 취소
-        if event == cv2.EVENT_LBUTTONDOWN and 0 <= x < pw and 0 <= y < ph:
-            points.append((x / (pw - 1), y / (ph - 1)))
-        elif event == cv2.EVENT_RBUTTONDOWN and points:
-            points.pop()
-    cv2.namedWindow("Set inspection area", cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback("Set inspection area", mouse)
-    print("검사 영역 가장자리를 순서대로 클릭하세요. Enter: 저장 / 우클릭: 되돌리기 / C: 초기화 / Esc: 취소")
-    try:
-        while True:
-            # 지금까지 찍은 점과 다각형을 미리보기 위에 그린다
-            picture = preview.copy()
-            if points:
-                vertices = np.array([(round(x * (pw-1)), round(y * (ph-1)))
-                                     for x, y in points], dtype=np.int32)
-                if len(points) >= 3:
-                    overlay = picture.copy()
-                    cv2.fillPoly(overlay, [vertices], (80, 210, 150))
-                    picture = cv2.addWeighted(overlay, 0.2, picture, 0.8, 0)
-                cv2.polylines(picture, [vertices], len(points) >= 3, (80, 210, 150), 2)
-                for vertex in vertices:
-                    cv2.circle(picture, tuple(vertex), 4, (80, 210, 150), -1)
-            cv2.rectangle(picture, (0, 0), (pw, 34), (25, 25, 25), -1)
-            cv2.putText(picture, message, (8, 22), cv2.FONT_HERSHEY_SIMPLEX,
-                        min(0.5, pw / 1500), (240, 240, 240), 1, cv2.LINE_AA)
-            cv2.imshow("Set inspection area", picture)
-            key = cv2.waitKey(20) & 0xFF
-            # Esc 또는 창 닫기 → 취소
-            if key == 27 or cv2.getWindowProperty("Set inspection area", cv2.WND_PROP_VISIBLE) < 1:
-                return None
-            if key == ord("c"):
-                points.clear()
-            # Enter → 검증 후 저장
-            if key in (10, 13):
-                try:
-                    selected = validate_roi(points)
-                    save_roi(selected, frame)
-                    print("검사 영역을 저장했습니다.")
-                    return selected
-                except (ValueError, OSError) as exc:
-                    print(exc)
-                    message = "Invalid area or save failed. C: clear | Esc: cancel"
-    finally:
-        cv2.destroyWindow("Set inspection area")
+    print("고정 ROI는 config.py의 ROI_X, ROI_Y에서 학습 당시 좌표로 설정하세요.")
+    return load_roi(frame)
 
 
 def roi_polygon(frame):
-    """0~1 비율 검사 영역을 이 프레임의 픽셀 좌표 다각형으로 바꾼다"""
-    height, width = frame.shape[:2]
-    return np.array([(round(x * (width - 1)), round(y * (height - 1)))
-                     for x, y in ROI_NORMALIZED], dtype=np.int32)
+    validate_frame(frame)
+    x, y, w, h = roi_bounds()
+    return np.array([(x, y), (x + w - 1, y),
+                     (x + w - 1, y + h - 1), (x, y + h - 1)], dtype=np.int32)
+
+
+def predict_roi(model, frame):
+    """Results boxes are already restored by Ultralytics to 600x320 ROI pixels."""
+    crop = crop_roi(frame)
+    return model.predict(source=crop, imgsz=config.YOLO_IMGSZ, rect=False,
+                         conf=0.25, device="cpu", verbose=False)[0]
 
 
 def inspect_roi(model, frame):
-    """검사 영역 안만 YOLO 로 검사한다.
-    영역을 감싸는 사각형만 잘라 영역 밖은 검게 가리고 검출한 뒤, 좌표를 원래 프레임 기준으로 되돌린다"""
-    polygon = roi_polygon(frame)
-    x, y, width, height = cv2.boundingRect(polygon)
-    crop = frame[y:y + height, x:x + width].copy()
-    mask = np.zeros((height, width), dtype=np.uint8)
-    cv2.fillPoly(mask, [polygon - np.array([x, y])], 255)
-    crop = cv2.bitwise_and(crop, crop, mask=mask)
-    # conf=0.25: 화면 표시용으로 낮은 신뢰도까지 받는다 (촬영 기준은 CAPTURE_CONFIDENCE)
-    predicted = model.predict(source=crop, conf=0.25, device="cpu", verbose=False)[0]
+    """Keep the existing full-frame display/DB coordinates; translate once only."""
+    predicted = predict_roi(model, frame)
+    x, y, _, _ = roi_bounds()
     boxes = predicted.boxes.data.clone()
-    # 잘라낸 이미지 기준 좌표 → 원본 프레임 좌표
     boxes[:, [0, 2]] += x
     boxes[:, [1, 3]] += y
-    # 검출 상자의 중심이 경계 밖에 있으면 판정에서 제외한다.
-    keep = []
-    for box in boxes:
-        cx = float((box[0] + box[2]) / 2)
-        cy = float((box[1] + box[3]) / 2)
-        keep.append(cv2.pointPolygonTest(polygon, (cx, cy), False) >= 0)
-    indices = [i for i, valid in enumerate(keep) if valid]
-    # 원본 프레임 기준의 새 Results 로 만들어 plot() 등을 그대로 쓸 수 있게 한다
     return Results(orig_img=frame, path=predicted.path,
-                   names=predicted.names, boxes=boxes[indices])
+                   names=predicted.names, boxes=boxes)
 
 
 def annotated_frame(result):
@@ -218,15 +100,24 @@ class LatestCamera:
     별도 스레드가 카메라를 계속 읽어 가장 최신 프레임 1장만 들고 있는다.
     (카메라 버퍼에 쌓인 옛 프레임으로 검사하는 것을 막기 위함)"""
     def __init__(self):
-        # config.CAMERA_INDEX 번 카메라, 기본 1번 (OBS Virtual Camera / DroidCam 등). DirectShow 로 연다
-        self.cap = cv2.VideoCapture(getattr(config, "CAMERA_INDEX", 1), cv2.CAP_DSHOW)
+        # 1번 카메라 (OBS Virtual Camera / DroidCam 등). DirectShow 로 연다
+        self.cap = cv2.VideoCapture(config.CAMERA_INDEX, cv2.CAP_DSHOW)
         if not self.cap.isOpened():
             self.cap.release()
             raise RuntimeError("카메라 연결 실패")
-        width, height = getattr(config, "CAMERA_WIDTH", None), getattr(config, "CAMERA_HEIGHT", None)
-        if width and height:  # 해상도 지정 (카메라가 지원하지 않으면 가장 가까운 값으로 열림)
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, config.CAMERA_WIDTH)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.CAMERA_HEIGHT)
+        # Driver properties can lie: check actual decoded pixels before starting.
+        ok, first = self.cap.read()
+        try:
+            if not ok:
+                raise RuntimeError("카메라 첫 프레임 읽기 실패")
+            validate_frame(first)
+        except Exception:
+            self.cap.release()
+            raise
+        print(f"카메라 실제 frame shape={first.shape}")
+        self.error = None
         self.lock = threading.Lock()
         self.frame = None        # 가장 최근 프레임
         self.timestamp = 0.0     # 그 프레임을 받은 시각 (time.monotonic)
@@ -243,6 +134,12 @@ class LatestCamera:
                 if not ok:
                     self.failed = True
                     return
+                try:
+                    validate_frame(frame)
+                except ValueError as exc:
+                    self.error = str(exc)
+                    self.failed = True
+                    return
                 self.frame = frame
                 self.timestamp = time.monotonic()
 
@@ -252,7 +149,7 @@ class LatestCamera:
         while time.monotonic() < deadline:
             with self.lock:
                 if self.failed:
-                    raise RuntimeError("카메라 프레임 읽기 실패")
+                    raise RuntimeError(self.error or "카메라 프레임 읽기 실패")
                 if self.frame is not None and self.timestamp > after:
                     return self.frame.copy(), self.timestamp
             time.sleep(0.005)
@@ -307,7 +204,10 @@ def save_capture(frame, result, angle, folder, number):
             raise RuntimeError("이미지 저장 실패: 재회전을 중단합니다")
     metadata = {"time": datetime.now().isoformat(), "angle_deg": angle,
                 "inspection_id": folder.name, "capture_number": number,
-                "defects": defects(result), "roi_normalized": ROI_NORMALIZED}
+                "defects": defects(result), "roi_normalized": ROI_NORMALIZED,
+                "frame_shape": list(frame.shape), "roi_xywh": list(roi_bounds()),
+                "roi_shape": list(crop_roi(frame).shape), "yolo_imgsz": config.YOLO_IMGSZ,
+                "yolo_rect": False, "box_coordinate_space": "full_frame"}
     (folder / (stem + ".json")).write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"촬영 저장 완료: {folder / (stem + '.jpg')}")
@@ -337,6 +237,7 @@ def main():
         frame, last_frame = camera.fresh()
         # 저장된 검사 영역이 없으면 처음에 지정받는다
         ROI_NORMALIZED = load_roi(frame)
+        print(input_description(frame))
         if not ROI_NORMALIZED:
             ROI_NORMALIZED = select_roi(frame) or []
         cv2.namedWindow(WINDOW, cv2.WINDOW_AUTOSIZE)

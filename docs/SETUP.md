@@ -241,7 +241,7 @@ python seed.py --demo
 | 명령 | 하는 일 |
 |---|---|
 | `python seed.py` | 계정 3개(`admin`/`admin1234` 최고관리자, `manager`/`manager1234` 관리자, `viewer`/`viewer1234` 조회 전용) + 불량 종류 D01~D05 |
-| `python seed.py --demo` | 위 + 최근 7일 더미 검사 데이터와 사진 (3D 치수 → YOLO 흐름, 화면 확인용) |
+| `python seed.py --demo` | 위 + 최근 7일 더미 검사 데이터와 사진 (3D 치수 → PatchCore → YOLO 흐름, 화면 확인용) |
 | `python seed.py --reset --demo` | **모든 테이블과 이미지를 지우고** 다시 생성. 되돌릴 수 없음 |
 
 여러 번 실행해도 이미 있는 데이터는 다시 만들지 않습니다. 실제 라인 데이터만 쌓고 싶으면 `--demo` 없이 실행하세요.
@@ -330,7 +330,7 @@ pytest -v
 
 ## 7. 검사 PC 연동
 
-검사 프로그램(3D 치수 / YOLO)은 결과를 **DB(MySQL)에 직접 저장**하고, MES 서버와 화면은 **DB 에서 읽어서** 보여 줍니다.
+검사 프로그램(3D 치수 / PatchCore / YOLO)은 결과를 **DB(MySQL)에 직접 저장**하고, MES 서버와 화면은 **DB 에서 읽어서** 보여 줍니다.
 ```
 검사 PC (inspection/) ──저장──▶ MySQL ◀──읽기── MES 서버 (backend/) ◀── 화면 (frontend/)
           └─ 사진은 MES 사진 폴더(STORAGE_DIR)로 복사, DB 에는 경로만
@@ -341,10 +341,10 @@ pytest -v
 - `common\` : DB 저장 모듈 `db_client.py` (두 검사 프로그램이 같이 씀). `mes_client.py` 는 MES API 로 보내는 예전 방식(선택)
 - `station_3d\` : 3D 치수 검사 (3D 환경, 3D 담당 코드)
 - `bridge_3d\` : 3D 측정 결과를 DB 에 저장하고 비전 검사로 검사번호를 넘기는 연결 프로그램 (`save_3d_to_db.py`)
-- `station_vision\` : 3D 검사 + YOLO 검사, 턴테이블 버튼 화면 (한 가상환경)
+- `station_vision\` : 3D 검사 + PatchCore → YOLO 검사, 턴테이블 버튼 화면 (한 가상환경)
 
 ### 7-2. 패키지 설치 (검사 프로그램 폴더마다 가상환경 따로)
-3D 와 YOLO 는 한 가상환경(`station_vision.venv`)에 같이 설치해 한 화면에서 돌립니다 (Windows 스마트 앱 컨트롤이 켜져 있으면 Open3D 가 막힘, inspection/README.md 참고).
+3D·PatchCore·YOLO 는 한 가상환경(`station_vision\.venv`)에 같이 설치해 한 화면에서 돌립니다 (3D 환경을 따로 두려면 `config.py` 의 `PYTHON_3D`).
 ```bat
 cd inspection\station_vision
 python -m venv .venv
@@ -373,10 +373,11 @@ iid = "20261006_inspection_143000_001"                  # 검사번호 (날짜 �
 db.start(iid, "redcar", product_serial="RC-0001")       # 0) 검사 시작
 db.send_dimension(iid, 194.8, 85.0, 58.7, standards=(194.5, 84.96, 58.68),
                   centering="OFF", interlock="0")        # 1) 3D 치수 + 측정 시점 장비 상태
-db.send_yolo_capture(iid, 1, "c001.jpg", "c001_annotated.jpg",   # 2) YOLO 결함 사진 1장마다
+db.send_patchcore(iid, score=0.82, threshold=0.6)       # 2) PatchCore (점수 >= 기준 → 불합격)
+db.send_yolo_capture(iid, 1, "c001.jpg", "c001_annotated.jpg",   # 3) YOLO 결함 사진 1장마다
                      defects=[{"defect_class": "scratch", "confidence": 0.91, "box": [120, 80, 180, 130]}],
                      angle_deg=95.0)
-db.complete_yolo(iid)                                   # 3) 한 바퀴 끝 → YOLO 분류 완료 (결함 없으면 정상)
+db.complete_yolo(iid)                                   # 4) 한 바퀴 끝 → YOLO 분류 완료
 ```
 3D 쪽은 `bridge_3d/save_3d_to_db.py`, 턴테이블 버튼 검사 프로그램(`inspection_app.py`)은 YOLO 단계를 이 방식으로 저장합니다.
 
@@ -393,9 +394,10 @@ db.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기�
 |---|---|
 | `DIMENSION_PENDING` | 치수 대기·재검 (치수가 아직 안 들어옴, 하나라도 누락, 또는 재검이라 다시 스캔 필요) |
 | `DIMENSION_DEFECT` | 치수 불합격 (축별 불량 한계 초과) |
-| `YOLO_PENDING` | 치수 합격, YOLO 검사 대기 (사진이 들어오는 중이어도 완료 전이면 여기) |
-| `NORMAL` | 치수 합격 + YOLO 완료, 결함 없음 |
-| `PROCESS_DEFECT` | 치수 합격 + YOLO 완료, 결함 있음 |
+| `PATCHCORE_PENDING` | 치수 합격, PatchCore 대기 |
+| `NORMAL` | 치수와 PatchCore 모두 합격 |
+| `YOLO_PENDING` | PatchCore 불합격, YOLO 분류 대기 (사진이 들어오는 중이어도 완료 전이면 여기) |
+| `PROCESS_DEFECT` | PatchCore 불합격, YOLO 분류 완료 |
 
 ### 7-5. 지켜야 할 값 규칙
 | 값 | 규칙 | 예 |

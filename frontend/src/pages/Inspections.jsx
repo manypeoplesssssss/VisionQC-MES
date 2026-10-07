@@ -117,6 +117,7 @@ export default function Inspections() {
               <th>제품</th>
               <th>제품번호</th>
               <th>3D 치수</th>
+              <th>PatchCore</th>
               <th>YOLO</th>
               <th>결함</th>
               <th>안전</th>
@@ -132,6 +133,7 @@ export default function Inspections() {
                 <td>{r.product_name}</td>
                 <td className="mono small">{r.product_serial || "-"}</td>
                 <td><StageBadge value={r.dimension_result} /></td>
+                <td><StageBadge value={r.patchcore_result} /></td>
                 <td><YoloBadge value={r.yolo_status} /></td>
                 <td className="small">{r.defect_count ? `${r.defect_classes.join(", ")} · ${r.defect_count}건` : "-"}</td>
                 <td>

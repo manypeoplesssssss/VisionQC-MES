@@ -8,7 +8,7 @@ MES 서버 PC 를 껐다 켠 뒤, PowerShell 로 전체를 다시 띄우는 순�
 | 0 | MySQL | 자동 (Windows 서비스 `MySQL84`) |
 | 1 | MES 서버 (백엔드, 8000) | PowerShell 창 1 |
 | 2 | MES 화면 (프론트엔드, 5173) | PowerShell 창 2 |
-| 3 | 3D 검사 + YOLO 검사 (한 화면) | PowerShell 창 3 |
+| 3 | 3D 검사 + PatchCore + YOLO 검사 (한 화면) | PowerShell 창 3 |
 
 창마다 켜 둔 채로 두고, 끌 때는 그 창에서 `Ctrl + C` (검사 프로그램은 창을 닫으면 됨).
 
@@ -42,9 +42,10 @@ npm run dev -- --host
 
 `--host` 를 빼면 이 PC 에서만 열립니다.
 
-## 3. 3D 검사 + YOLO 검사 (창 3, 한 화면)
+## 3. 3D 검사 + PatchCore + YOLO 검사 (창 3, 한 화면)
 
-3D 와 YOLO 는 같은 가상환경(`inspection\station_vision\.venv`)에서 한 화면으로 돌립니다.
+3D·PatchCore·YOLO 는 같은 가상환경(`inspection\station_vision\.venv`)에서 한 화면으로 돌립니다.
+PatchCore 모델은 `inspection\visionPatchCore\patchcore_export\models\v3\model.ckpt` 를 읽습니다 (100MB 가 넘어 git 에는 없음, 따로 복사). 처음 켤 때 모델을 불러오느라 30초쯤 걸립니다.
 ```powershell
 cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_vision
 .venv\Scripts\python.exe inspection_app.py
@@ -58,8 +59,10 @@ cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_visio
    - 턴테이블을 비운 상태에서 **[① 배경 촬영]** → 배경을 찍는다
    - 물체를 올리고 준비되면 **[② 스캔 시작]** → 그때부터 턴테이블이 돌며 스캔한다 (누르기 전에는 돌지 않는다) 3D 가 카메라·턴테이블을 쓰는 동안 이 화면은 연결을 놓아 준다
    YOLO 카메라(아이폰 카메라 등)는 3D 검사 때 꺼 두어도 됩니다. 3D 가 끝난 뒤 카메라를 켜고 [YOLO 카메라 연결]이나 ② 를 누르면 그때 연결합니다 (프로그램을 껐다 켤 필요 없음)
-4. 치수가 **합격** 이면 **[② YOLO 검사 시작]** 이 켜진다. 불합격·재검이면 켜지지 않는다 (재검은 다시 ① 부터)
-5. 검사 영역이 맞는지 확인 (카메라가 움직였으면 [검사 영역 설정]) 후 **[② YOLO 검사 시작]**
+4. 치수가 **합격** 이면 **[② 검사 시작 (PatchCore → YOLO)]** 이 켜진다. 불합격·재검이면 켜지지 않는다 (재검은 다시 ① 부터)
+5. **[② 검사 시작]** 을 누르면 PatchCore 가 `config.py` 의 `PATCHCORE_VIEWS` 장(기본 72장 = 5도씩)을 멈춰 가며 찍고, 가장 높은 이상 점수로 판정한다.
+   합격이면 여기서 끝(최종 정상), 불합격이면 이어서 YOLO 한 바퀴로 결함 종류·위치를 찍는다. **[PatchCore 먼저]** 체크를 끄면 YOLO 만 한다.
+   검사 영역은 학습 때 쓴 **고정 ROI** (`ROI_X`, `ROI_Y`, 600×320 픽셀) 라서 화면에서 바꾸지 않는다. 카메라는 1920×1080 이어야 하고, 카메라를 옮겼으면 학습 때 위치로 다시 맞춘다 (입력 조건: `station_vision\PREPROCESSING.md`)
 
 장비 없이 시험: `inspection_app.py --sim` (3D 는 가짜 측정값, 결과는 `--sim-3d fail` / `recheck` 로 바꿈).
 3D 없이 YOLO 만 시험: `inspection_app.py --no-gate` (② 잠금 해제).

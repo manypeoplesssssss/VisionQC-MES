@@ -30,7 +30,7 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(
     title="VisionQC AI MES API",
     version="1.0.0",
-    description="비전 검사(3D 치수 → YOLO) 결과 수집·조회 API. 검사 1회 = product_inspection 1행",
+    description="비전 검사(3D 치수 → PatchCore → YOLO) 결과 수집·조회 API. 검사 1회 = product_inspection 1행",
 )
 
 # CORS: 개발 중에는 Vite 프록시를 써서 필요 없지만, 프론트를 다른 주소에서 띄울 때를 대비

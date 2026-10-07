@@ -4,6 +4,7 @@
  * 검사 1회의 단계별 결과를 위에서 아래로 보여준다.
  *   요약        : 최종 결과, 제품, 제품번호, 사진 폴더
  *   3D 치수     : 실측 / 기준 / 차이 / 축별 합불 (허용오차 ±3mm)
+ *   PatchCore   : 이상 점수 / 기준 / 합불
  *   YOLO        : 결함 사진 (누르면 크게) + 결함 목록 + 불량 코드(D01~D05) 지정
  *   원인 후보 · 권장 조치 : 지정한 불량 코드에서 자동으로 모임 (확정 원인이 아닌 후보)
  * 관리자는 불량 코드 지정과 검사 삭제를 할 수 있다.
@@ -83,7 +84,7 @@ export default function InspectionDetail() {
           <dt>사진 폴더</dt><dd className="mono small">{insp.capture_folder || "-"}</dd>
           <dt>단계</dt>
           <dd className="row-gap">
-            3D 치수 <StageBadge value={insp.dimension_result} /> → YOLO <YoloBadge value={insp.yolo_status} />
+            3D 치수 <StageBadge value={insp.dimension_result} /> → PatchCore <StageBadge value={insp.patchcore_result} /> → YOLO <YoloBadge value={insp.yolo_status} />
           </dd>
           <dt>장비 상태</dt>
           <dd className="row-gap">
@@ -129,6 +130,21 @@ export default function InspectionDetail() {
             </>
           ) : (
             <p className="muted small">아직 치수 측정값이 없습니다.</p>
+          )}
+        </div>
+
+        <div className="card">
+          <h3>PatchCore <StageBadge value={insp.patchcore_result} /></h3>
+          {insp.patchcore_score != null ? (
+            <table className="mini">
+              <tbody>
+                <tr><th>이상 점수</th><td className={`num ${insp.patchcore_result === "FAIL" ? "ng-text" : ""}`}>{insp.patchcore_score}</td></tr>
+                <tr><th>판정 기준</th><td className="num">{insp.patchcore_threshold} <span className="muted small">(점수가 기준 이상이면 불합격)</span></td></tr>
+                <tr><th>모델 버전</th><td>{insp.patchcore_model_version || "-"}</td></tr>
+              </tbody>
+            </table>
+          ) : (
+            <p className="muted small">아직 PatchCore 결과가 없습니다.</p>
           )}
         </div>
       </section>

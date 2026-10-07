@@ -19,20 +19,20 @@ inspection/
 └─ handoff/          3D → 비전으로 검사번호를 넘기는 폴더 (Git 에 올리지 않음)
 ```
 
-## 왜 프로그램이 두 개인가
-3D 와 YOLO 는 한 가상환경(`station_vision\.venv`)에서 한 화면으로 돌립니다. PatchCore 는 검사 흐름에서 제외했습니다.
+## 검사 흐름
+3D 와 YOLO 는 한 가상환경(`station_vision\.venv`)에서 한 화면으로 돌립니다. PatchCore 도 같은 화면에서 돌립니다 (3D → PatchCore → YOLO).
 [3D 검사] 버튼이 `station_3d` 스크립트를 그대로 실행하고(코드는 수정하지 않음), MES 에서는 같은 검사번호(`inspection_id`) 한 줄로 이어 붙입니다.
 
 ```
 station_3d     스캔 → 병합 → 측정 (measurement.json)
 bridge_3d      검사 시작(start) + 치수(send_dimension) → handoff/ 에 검사번호 기록
    (환경 변경)
-station_vision handoff/ 의 검사번호를 읽어 → 치수 합격이면 YOLO 사진 → 완료 (결함 없으면 정상)
+station_vision handoff/ 의 검사번호를 읽어 → 치수 합격이면 PatchCore(send_patchcore) → 불합격이면 YOLO 사진 → 완료
 ```
 최종 결과(정상/치수 불합격/공정 불량 …)는 MES 서버가 자동으로 계산합니다.
 
 **장비 안전:** 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 센서 연결 전이라 버튼 화면의 [장비 안전 상태]에서 작업자가 고릅니다 (기본 미확인 → 시작 불가). 센서를 붙이면 `inspection_app.py` 의 `App.safety_state()` 만 센서 값을 읽게 바꾸면 됩니다.
-3D 쪽 실행 순서와 연결 방법은 [bridge_3d/README.md](bridge_3d/README.md) (station_3d 코드는 그대로 두고 bridge_3d 가 결과만 읽음). PatchCore 는 검사 흐름에서 제외했습니다 (`visionPatchCore/` 폴더는 건드리지 않고 그대로 둠).
+3D 쪽 실행 순서와 연결 방법은 [bridge_3d/README.md](bridge_3d/README.md) (station_3d 코드는 그대로 두고 bridge_3d 가 결과만 읽음). PatchCore 는 `station_vision/patchcore_infer.py` 가 `visionPatchCore/patchcore_export/models/v3/model.ckpt` 를 읽어서 판정합니다 (학습 코드 폴더는 건드리지 않음, 모델 파일은 git 에 없음).
 
 ## 가상환경 만들기 (폴더마다 따로)
 ```powershell
@@ -49,7 +49,11 @@ cd inspection\station_vision
 .venv\Scripts\python.exe inspection_app.py --sim    # 장비 없이 시험 (captures 사진, 3D 는 가짜 측정값)
 .venv\Scripts\python.exe inspection_app.py --no-gate  # 3D 없이 YOLO 만 시험
 ```
-화면 순서: **[① 3D 검사]** → 치수 합격이면 **[② YOLO 검사 시작]** 이 켜집니다 (불합격·재검이면 켜지지 않음).
+화면 순서: **[① 3D 검사]** → 치수 합격이면 **[② 검사 시작]** 이 켜집니다 (불합격·재검이면 켜지지 않음).
+[②] 는 **PatchCore** (기본 5도씩 72장, 가장 높은 이상 점수로 판정) 를 먼저 하고, 합격이면 거기서 끝(정상), 불합격이면 이어서 **YOLO** 한 바퀴를 합니다. `PatchCore 먼저` 체크를 끄면 YOLO 만 합니다.
+PatchCore 사진은 검사 폴더의 `patchcore/` 에 `_pcNN.jpg`(원본), `_pcNN_roi.png`(모델 입력), `_pcNN_heatmap.jpg`, `_pcNN.json`(각도·점수·기준·shape) 으로 남습니다.
+검사 영역은 학습 때 쓴 **고정 ROI**(`config.py` 의 `ROI_X`·`ROI_Y`, 600×320 픽셀)이고 카메라는 1920×1080 이어야 합니다 (`station_vision/PREPROCESSING.md`).
+`--sim` 은 1920×1080 원본 사진이 `captures/` 안에 있어야 합니다 (작은 사진을 확대하지 않음).
 DB 주소·사진 폴더·제품 모델명은 화면 오른쪽에서 바꾸거나 `station_vision/config.py` 에 `DB_URL`, `STORAGE_DIR`, `PRODUCT` 를 적습니다.
 
 ## 테스트

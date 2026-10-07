@@ -1,11 +1,16 @@
 """
 inspection_app.py — 3D 치수 검사 + YOLO 결함 검사를 한 화면에서 버튼으로 조작하는 프로그램
 
-검사 순서 (PatchCore 는 검사 흐름에서 제외)
-    1. [3D 검사]  스캔 → 병합 → 측정 → DB 저장. 3D 코드(station_3d)는 같은 가상환경의 파이썬으로
+검사 순서
+    1. [① 3D 검사]  스캔 → 병합 → 측정 → DB 저장. 3D 코드(station_3d)는 같은 가상환경의 파이썬으로
                   그대로 실행만 한다 (코드를 고치지 않음). 치수 판정은 DB 가 한다
-    2. 치수 합격 → [YOLO 검사] 버튼이 켜진다. 불합격·재검이면 켜지지 않는다 (다시 스캔)
-    3. [YOLO 검사] 한 바퀴 돌며 결함 촬영 → DB 저장. 결함이 없으면 최종 정상, 있으면 공정 불량
+    2. 치수 합격 → [② 검사 시작] 버튼이 켜진다. 불합격·재검이면 켜지지 않는다 (다시 스캔)
+    3. [② 검사 시작] PatchCore: 설정한 각도(기본 5도)씩 멈추고 찍어서 이상 점수 계산 → 가장 높은 점수로 판정
+       (각 사진의 원본·ROI·히트맵·점수 json 은 검사 폴더/patchcore 에 저장)
+    4. PatchCore 합격 → 검사 끝 (최종 정상). 불합격 → 이어서 YOLO 한 바퀴로 결함 종류·위치 촬영
+    [PatchCore 먼저] 를 끄면 YOLO 만 한다 (명시적인 YOLO 단독 모드).
+    검사 영역은 학습 때 쓴 고정 ROI(config.py 의 ROI_X/ROI_Y, 600×320 픽셀)이고 PatchCore·YOLO 가 같은 ROI 를 쓴다
+    (자세한 입력 조건은 추가 수정/추가/PREPROCESSING.md 참고)
 
 yolo_live.py 의 검사 로직(검사 영역, YOLO 검출, 정지·재촬영, 사진 저장)을 그대로 쓰고
 키보드 대신 화면 버튼으로 조작한다. 검사 결과는 db_client.py 로 DB(MySQL)에 바로 저장하고,
@@ -63,8 +68,11 @@ BRIDGE_3D = ROOT.parent / "bridge_3d" / "save_3d_to_db.py"
 GO_FILE = ROOT / "captures" / "3d_go.flag"  # 화면 버튼 → 3D 스캔 대기 해제 신호 (wait_patch.py 가 이 파일을 본다)
 RUN_3D = ROOT.parent / "bridge_3d" / "run_3d_script.py"  # 3D 스크립트 실행기 (3D 코드 수정 없이 포트만 덮어씀)
 PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스크립트를 돌릴 파이썬 (기본: 이 프로그램과 같은 환경)
-# 이 상태일 때는 검사 시작 버튼을 잠근다
-BUSY = ("3D 검사 중", "YOLO 검사 중")
+# PatchCore (1단계): 턴테이블을 360/VIEWS 도씩 멈추며 찍고, 가장 높은 이상 점수로 합격/불합격
+PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 72))          # 72 → 5도씩 72장
+PATCHCORE_MODEL = getattr(config, "PATCHCORE_MODEL", None)            # 없으면 visionPatchCore 의 models/v3
+# 이 상태일 때는 검사 시작 버튼을 잠근다 ("PatchCore 3/72" 같은 진행 표시도 포함)
+BUSY = ("3D 검사 중", "PatchCore 검사 중", "YOLO 검사 중")
 # 3D 검사(bridge_3d/save_3d_to_db.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
 HANDOFF = ROOT.parent / "handoff" / "latest.json"
 # 장비 안전 상태 표시 이름. 검사 허용: 센터링 OFF(정위치) + 인터락 0(정상)
@@ -125,6 +133,14 @@ class SimTurntable:
         self.stop()
         self.position_deg = 0.0
 
+    def rotate(self, deg):
+        """정해진 각도만큼 돌고 멈춤 (PatchCore 각도별 촬영용)"""
+        time.sleep(abs(deg) / self.SPEED)
+        self.position_deg += deg
+
+    def finish_turn(self):
+        self.position_deg = 0.0
+
     def reported_angle(self):
         return self._now_angle()
 
@@ -135,10 +151,16 @@ class SimTurntable:
 class SimCamera:
     """LatestCamera 와 같은 fresh()/close() 를 가진 가짜 카메라. 저장된 원본 사진을 돌려 가며 보여 준다"""
     def __init__(self, interval=1.5):
-        files = sorted(p for p in (ROOT / "captures").rglob("*.jpg") if "_annotated" not in p.stem)
-        self.frames = [f for f in (imread(p) for p in files[:40]) if f is not None]
+        files = sorted(p for p in (ROOT / "captures").rglob("*.jpg") if not p.stem.endswith(("_annotated", "_heatmap")))
+        self.frames = []
+        for p in files:
+            f = imread(p)
+            if f is not None and f.shape == (config.CAMERA_HEIGHT, config.CAMERA_WIDTH, 3):
+                self.frames.append(f)
+                if len(self.frames) == 40:
+                    break
         if not self.frames:
-            raise RuntimeError("시뮬레이션에 쓸 사진이 captures 폴더에 없습니다")
+            raise RuntimeError("시뮬레이션에는 1920×1080 원본 사진이 필요합니다. 작은 사진을 확대하지 않습니다.")
         self.interval = interval
         self.t0 = time.monotonic()
 
@@ -236,7 +258,7 @@ class Sender(threading.Thread):
                     self.client.product_name.update(product_names)  # 진행 중인 검사의 제품명 유지
                     self.client_key = (db_url, storage_dir)
                 res = getattr(self.client, action)(**kwargs)
-                what = {"start": "검사 시작", "send_yolo_capture": f"결함 사진 {kwargs.get('capture_number')}",
+                what = {"start": "검사 시작", "send_patchcore": "PatchCore 판정", "send_yolo_capture": f"결함 사진 {kwargs.get('capture_number')}",
                         "complete_yolo": "YOLO 완료", "check_safety": "안전 상태"}[action]
                 if res is None:
                     self.events.put(("log", f"DB 연결 실패 → 대기열에 저장 ({self.client.pending()}건). DB 를 확인하세요"))
@@ -257,8 +279,10 @@ class Engine(threading.Thread):
     """카메라·턴테이블·YOLO 를 다루는 스레드. 화면(Tk)은 건드리지 않고 events 큐로만 알린다.
     흐름은 yolo_live.main() 과 같다: 시작 → 연속 회전 → 0.80 이상 결함 → 정지·재검출·저장 → 재회전"""
     def __init__(self, sim, events, sender, mes_settings, safety=lambda: ("UNKNOWN", "UNKNOWN"),
-                 gate_3d=True, sim_3d="pass"):
+                 gate_3d=True, sim_3d="pass", patchcore_on=lambda: True):
         super().__init__(daemon=True)
+        self.patchcore_on = patchcore_on  # 화면의 [PatchCore 먼저] 체크 상태
+        self.patchcore = None             # PatchCoreInspector (불러오기 실패하면 None → PatchCore 검사 보류)
         self.sim = sim
         self.gate_3d = gate_3d  # True: 3D 치수 합격 뒤에만 YOLO 시작
         self.sim_3d = sim_3d    # 시뮬레이션의 가짜 3D 측정 결과 (pass / recheck / fail)
@@ -308,7 +332,7 @@ class Engine(threading.Thread):
             return self.camera
         try:
             self.camera = SimCamera() if self.sim else live.LatestCamera()
-        except RuntimeError as exc:
+        except (RuntimeError, ValueError) as exc:  # ValueError: 카메라가 1920×1080 이 아닌 크기를 돌려줌
             self.camera = None
             self._log(f"YOLO 카메라(번호 {getattr(config, 'CAMERA_INDEX', 1)})를 열지 못했습니다: {exc}. "
                       "카메라(아이폰 등)를 켠 뒤 [카메라 연결]이나 ② 를 누르세요")
@@ -319,9 +343,15 @@ class Engine(threading.Thread):
         if camera is None:
             return None, last_frame
         frame, last_frame = camera.fresh()
-        if not live.ROI_NORMALIZED:
+        try:
             live.ROI_NORMALIZED = live.load_roi(frame)
-        self._log("YOLO 카메라 연결 완료" + ("" if live.ROI_NORMALIZED else " - [검사 영역 설정]을 먼저 하세요"))
+            self._log(live.input_description(frame))
+        except ValueError as exc:  # 카메라 크기 또는 config.py 의 ROI_X/ROI_Y 문제
+            self._log(f"검사 영역을 쓸 수 없습니다: {exc}")
+            self.camera = None
+            camera.close()
+            return None, last_frame
+        self._log("YOLO 카메라 연결 완료: 학습 좌표의 고정 600×320 ROI 적용")
         return camera, last_frame
 
     def _show_3d_view(self, running):
@@ -374,6 +404,7 @@ class Engine(threading.Thread):
             names = set(model.names.values())
             if not live.DEFECT_CLASSES.intersection(names):
                 raise RuntimeError(f"모델에 결함 클래스가 없습니다: {names}")
+            self._load_patchcore()
             table = self._open_table()
             if self.sim:
                 self._log("시뮬레이션 모드: captures 사진을 카메라 대신, 가짜 3D 측정값을 사용합니다")
@@ -546,6 +577,80 @@ class Engine(threading.Thread):
             self._state(status="3D 완료")
         return camera, table, last_frame
 
+    def _load_patchcore(self):
+        """PatchCore 모델(v3)을 CPU로 불러온다. 실패 시 자동 YOLO 우회는 하지 않는다."""
+        self._log("PatchCore 모델 불러오는 중... (CPU, 처음에는 시간이 걸림)")
+        try:
+            from patchcore_infer import PatchCoreInspector
+            self.patchcore = PatchCoreInspector(PATCHCORE_MODEL, device="cpu")
+            self._log(f"PatchCore 준비 완료: {self.patchcore.model_path.parent.name} "
+                      f"(판정 기준 {self.patchcore.threshold:.3f})")
+        except Exception as exc:
+            self.patchcore = None
+            self._log(f"PatchCore 모델을 불러오지 못했습니다 → PatchCore 검사 보류: {exc}")
+
+    def _patchcore_crop(self, frame):
+        return live.crop_roi(frame)
+
+    def _patchcore_turn(self, camera, table, folder):
+        """PatchCore 1단계: 360/VIEWS 도씩 멈춰서 찍고 사진마다 이상 점수를 낸다. 가장 높은 점수로 판정.
+        반환 ("done", 최고 점수) / ("stop", None) / ("quit", None)"""
+        pc = self.patchcore
+        out = folder / "patchcore"
+        out.mkdir(parents=True, exist_ok=True)
+        step = 360.0 / PATCHCORE_VIEWS
+        scores = []
+        for i in range(PATCHCORE_VIEWS):
+            # 촬영 사이에도 [정지]·창 닫기를 받는다 (검사 영역 변경 등 다른 명령은 무시)
+            try:
+                command, _ = self.commands.get_nowait()
+            except queue.Empty:
+                command = None
+            if command in ("stop", "quit"):
+                if command == "stop":
+                    self._log("PatchCore 검사 수동 정지 (이 검사는 DB 에 PatchCore 결과를 저장하지 않음)")
+                    self._state(status="정지", angle=table.position_deg)
+                return command, None
+            # 회전 전 장비 안전 확인. 이상이면 멈추고 보류 + 알람 (자동 재시작 안 함)
+            centering, interlock = self.safety()
+            if not safety_ok(centering, interlock):
+                self._log(f"안전 이상으로 정지·보류: 센터링 {CENTERING_KO.get(centering, centering)} / "
+                          f"인터락 {INTERLOCK_KO.get(interlock, interlock)} (자동 재시작 안 함)")
+                self._state(status="보류(안전)", angle=table.position_deg)
+                self._submit_safety("PATCHCORE", centering, interlock, self.job["inspection_id"], "PatchCore 중 이상 감지")
+                return "stop", None
+            if i:
+                table.rotate(step)
+            angle = table.position_deg
+            self._state(angle=angle, status=f"PatchCore {i + 1}/{PATCHCORE_VIEWS}")
+            frame, _ = camera.fresh(after=time.monotonic() + 0.2)  # 멈춘 뒤의 새 프레임
+            roi = self._patchcore_crop(frame)
+            result = pc.inspect(roi)
+            if i == 0:
+                self._log(f"PatchCore frame shape={frame.shape}; ROI shape={roi.shape}; "
+                          f"tensor={pc.last_input_shape}; feature input={pc.last_feature_input_shape}")
+            scores.append(result["score"])
+            stem = out / f"{folder.name}_pc{i + 1:02d}"
+            if not (live.imwrite(stem.with_suffix(".jpg"), frame)
+                    and live.imwrite(stem.parent / (stem.name + "_roi.png"), roi)
+                    and live.imwrite(stem.parent / (stem.name + "_heatmap.jpg"), result["heatmap"])):
+                raise RuntimeError("PatchCore 사진 저장 실패")
+            stem.with_suffix(".json").write_text(json.dumps(
+                {"time": datetime.now().isoformat(), "angle_deg": angle, "view": i + 1,
+                 "score": result["score"], "threshold": result["threshold"], "anomalous": result["anomalous"],
+                 "crop": "fixed_roi", "roi_normalized": live.ROI_NORMALIZED,
+                 "roi_xywh": list(live.roi_bounds()), "frame_shape": list(frame.shape),
+                 "roi_shape": list(roi.shape), "input_shape": list(pc.last_input_shape),
+                 "feature_input_shape": list(pc.last_feature_input_shape),
+                 "model": str(pc.model_path)}, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self.frame_lock:
+                self.view, self.raw = result["heatmap"], frame
+            self._log(f"PatchCore {i + 1}/{PATCHCORE_VIEWS} ({angle:.0f}°): 점수 {result['score']:.3f}"
+                      + (" ← 기준 이상" if result["anomalous"] else ""))
+            self._state(pc_score=f"{max(scores):.3f} / {pc.threshold:.3f}")
+        table.finish_turn()  # 남은 각도를 돌아 0도로
+        return "done", max(scores)
+
     def _begin_job(self, folder, handoff=None):
         """한 바퀴 시작 → DB 에 검사 1회 생성. 설정은 이 순간 값으로 고정 (도중에 화면 값을 바꿔도 섞이지 않게)
         handoff 가 있으면 3D 검사의 검사번호를 이어받아 같은 검사에 결과를 붙인다 (검사 시작 시각도 3D 측정 시각 유지)"""
@@ -566,7 +671,8 @@ class Engine(threading.Thread):
 
     def _finish_job(self, captures):
         """한 바퀴 완료 → DB 에 YOLO 분류 완료"""
-        verdict = "FAIL" if captures else "PASS"
+        # PatchCore 가 불합격이었으면 YOLO 가 결함을 못 찾아도 최종은 불량 (DB 규칙과 같음)
+        verdict = "FAIL" if captures or getattr(self, "pc_failed", False) else "PASS"
         self._log(f"한 바퀴 검사 완료: {verdict} / 촬영 {captures}회")
         self._state(status="완료", verdict=verdict, yolo_ready=not self.gate_3d)  # 다음 제품은 3D 부터
         self._submit("complete_yolo")
@@ -612,9 +718,13 @@ class Engine(threading.Thread):
             else:
                 self._close_preview()
                 frame, last_frame = camera.fresh(after=last_frame)
-                result = live.inspect_roi(model, frame) if live.ROI_NORMALIZED else None
+                # YOLO 는 PatchCore 불합격 뒤(running)나 YOLO 단독 모드에서만 돌린다
+                use_yolo = running or not self.patchcore_on()
+                result = live.inspect_roi(model, frame) if live.ROI_NORMALIZED and use_yolo else None
                 found = live.capture_defects(result) if result is not None else []
                 picture = live.annotated_frame(result) if result is not None else frame.copy()
+                if result is None:
+                    cv2.polylines(picture, [live.roi_polygon(frame)], True, (80, 210, 150), 2)
                 with self.frame_lock:
                     self.view, self.raw = picture, frame
 
@@ -641,18 +751,13 @@ class Engine(threading.Thread):
                 if camera is None:
                     camera, last_frame = self._camera_ready(self._open_camera(), last_frame)
                 continue
-            if command == "roi":
-                live.ROI_NORMALIZED = value
-                self._log("검사 영역을 적용했습니다")
-                self._state(status="대기")
-                continue
             if command == "start" and not running:
                 if camera is None:
                     camera, last_frame = self._camera_ready(self._open_camera(), last_frame)
                     if camera is None:
                         continue
                 if not live.ROI_NORMALIZED:
-                    self._log("[검사 영역 설정]을 먼저 하세요")
+                    self._log("config.py의 학습 ROI 시작 좌표를 확인하세요")
                     continue
                 # 3D 검사에서 넘어온 검사번호가 있으면 이어받는다. 치수 불합격 제품은 비전 검사를 하지 않음
                 handoff = peek_handoff()
@@ -682,15 +787,49 @@ class Engine(threading.Thread):
                     continue
                 table.zero()
                 folder = live.new_inspection_folder()
+                self.pc_failed = False
+                self._begin_job(folder, handoff)
+                self._state(status="PatchCore 검사 중", angle=0.0, captures=0, verdict="-", pc_score="-",
+                            folder=folder.name, yolo_ready=False)
+
+                # ---- 1단계 PatchCore: 설정한 각도(기본 5도)씩 멈춰 찍고 최고 점수로 판정. 합격이면 YOLO 없이 끝
+                if self.patchcore is not None and self.patchcore_on():
+                    pc = self.patchcore
+                    self._log(f"PatchCore 검사 시작: {folder.name} ({PATCHCORE_VIEWS}장, {360 / PATCHCORE_VIEWS:g}도씩)")
+                    self._submit_safety("PATCHCORE", centering, interlock, self.job["inspection_id"], "검사 시작 시 정상")
+                    outcome, score = self._patchcore_turn(camera, table, folder)
+                    if outcome == "quit":
+                        return
+                    if outcome == "stop":
+                        continue
+                    self._submit("send_patchcore", score=score, threshold=pc.threshold, model_version=pc.version)
+                    if score < pc.threshold:
+                        self._log(f"PatchCore 합격 (최고 점수 {score:.3f} < 기준 {pc.threshold:.3f}) → YOLO 생략, 검사 완료")
+                        self._state(status="완료", verdict="PASS", angle=0.0)
+                        continue
+                    self.pc_failed = True
+                    self._log(f"PatchCore 불합격 (최고 점수 {score:.3f} ≥ 기준 {pc.threshold:.3f}) → YOLO 로 결함 확인")
+                    self._state(verdict="PatchCore 불합격")
+                    centering, interlock = self.safety()
+                    if not safety_ok(centering, interlock):
+                        self._log("안전 이상으로 YOLO 를 시작하지 않습니다 (보류)")
+                        self._state(status="보류(안전)")
+                        self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "YOLO 시작 전 이상")
+                        continue
+                elif self.patchcore_on():
+                    self._log("PatchCore 모델이 없어 검사를 보류합니다. 자동으로 YOLO를 실행하지 않습니다.")
+                    self._state(status="PatchCore 준비 필요")
+                    continue
+
+                # ---- 2단계 YOLO: 연속 회전하며 결함 종류·위치 촬영
                 captures, last_capture_angle, angle = 0, None, 0.0
                 table.start()
                 running = True
                 last_poll = 0.0
                 last_frame = time.monotonic()  # 시작 전 정지 영상으로 검출하지 않도록
-                self._log(f"한 바퀴 검사 시작: {folder.name}")
-                self._begin_job(folder, handoff)
-                self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "검사 시작 시 정상")
-                self._state(status="YOLO 검사 중", angle=0.0, captures=0, verdict="-", folder=folder.name, yolo_ready=False)
+                self._log(f"YOLO 한 바퀴 검사 시작: {folder.name}")
+                self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "YOLO 시작 시 정상")
+                self._state(status="YOLO 검사 중", angle=0.0)
                 continue
             if not running:
                 continue
@@ -750,11 +889,10 @@ class App:
         self.events = queue.Queue()
         self.sender = Sender(self.events)
         self.sender.start()
-        self.engine = Engine(sim, self.events, self.sender, self.mes_settings, self.safety_state, gate_3d, sim_3d)
+        self._patchcore_on = True
+        self.engine = Engine(sim, self.events, self.sender, self.mes_settings, self.safety_state, gate_3d, sim_3d,
+                             lambda: self._patchcore_on)
         self.yolo_ready = not gate_3d
-        self.editing = False     # 검사 영역 지정 중
-        self.edit_frame = None
-        self.points = []
         self.photo = None
         self.view_scale = 1.0
         self._mes_cache = {}
@@ -775,8 +913,6 @@ class App:
         self.canvas = tk.Canvas(main, width=VIEW_MAX[0] * 2 // 3, height=VIEW_MAX[1] * 2 // 3,
                                 bg="#1e1e1e", highlightthickness=0)
         self.canvas.grid(row=0, column=0, rowspan=2, sticky="nsew")
-        self.canvas.bind("<Button-1>", self._click)
-        self.canvas.bind("<Button-3>", self._undo)
         main.columnconfigure(0, weight=1)
         main.rowconfigure(1, weight=1)
 
@@ -787,29 +923,24 @@ class App:
         box.pack(fill="x")
         self.btn_3d = ttk.Button(box, text="① 3D 검사", command=lambda: self.engine.send("scan3d"))
         self.btn_go = ttk.Button(box, text="3D 진행 버튼 (스캔 중 켜짐)", command=lambda: self.engine.send("go3d"))
-        self.btn_start = ttk.Button(box, text="② ▶ YOLO 검사 시작", command=lambda: self.engine.send("start"))
+        self.btn_start = ttk.Button(box, text="② ▶ 검사 시작 (PatchCore → YOLO)", command=lambda: self.engine.send("start"))
         self.btn_stop = ttk.Button(box, text="■ 정지", command=lambda: self.engine.send("stop"))
-        self.btn_roi = ttk.Button(box, text="검사 영역 설정", command=self.begin_roi)
+        self.btn_roi = ttk.Button(box, text="고정 검사 영역 확인", command=self.begin_roi)
         self.btn_cam = ttk.Button(box, text="YOLO 카메라 연결", command=lambda: self.engine.send("camera"))
         for b in (self.btn_3d, self.btn_go, self.btn_start, self.btn_stop, self.btn_roi, self.btn_cam):
             b.pack(fill="x", pady=2)
         self.go_label = ""
         ttk.Label(box, text="3D 치수가 합격이면 ② 가 켜집니다", foreground="#6b7686").pack(anchor="w")
-
-        self.roi_box = ttk.LabelFrame(side, text="검사 영역 설정", padding=8)
-        ttk.Label(self.roi_box, text="영상에서 가장자리를 순서대로 클릭\n우클릭: 마지막 점 취소",
-                  justify="left").pack(anchor="w")
-        row = ttk.Frame(self.roi_box)
-        row.pack(fill="x", pady=(6, 0))
-        ttk.Button(row, text="저장", command=self.save_roi).pack(side="left", expand=True, fill="x")
-        ttk.Button(row, text="초기화", command=lambda: self.points.clear()).pack(side="left", expand=True, fill="x")
-        ttk.Button(row, text="취소", command=self.end_roi).pack(side="left", expand=True, fill="x")
+        # 끄면 PatchCore 없이 YOLO 만 (YOLO 단독 모드). 검사 시작 순간의 값으로 정해진다
+        self.pc_var = tk.BooleanVar(value=True)
+        self.pc_var.trace_add("write", lambda *_: setattr(self, "_patchcore_on", bool(self.pc_var.get())))
+        ttk.Checkbutton(box, text=f"PatchCore 먼저 ({PATCHCORE_VIEWS}장)", variable=self.pc_var).pack(anchor="w", pady=(4, 0))
 
         info = ttk.LabelFrame(side, text="상태", padding=8)
         info.pack(fill="x", pady=(8, 0))
         self.vars = {k: tk.StringVar(value=v) for k, v in
-                     dict(status="연결 중", dimension="-", angle="0.0°", captures="0", verdict="-", folder="-", job="-", pending="0").items()}
-        for label, key in (("상태", "status"), ("3D 치수", "dimension"), ("각도", "angle"), ("결함 촬영", "captures"),
+                     dict(status="연결 중", dimension="-", angle="0.0°", pc_score="-", captures="0", verdict="-", folder="-", job="-", pending="0").items()}
+        for label, key in (("상태", "status"), ("3D 치수", "dimension"), ("각도", "angle"), ("PC 점수", "pc_score"), ("결함 촬영", "captures"),
                            ("판정", "verdict"), ("검사 폴더", "folder"), ("검사번호", "job"), ("DB 대기", "pending")):
             r = ttk.Frame(info)
             r.pack(fill="x")
@@ -876,27 +1007,17 @@ class App:
             self.log.delete(0, self.log.size() - 600)
         self.log.see("end")
 
-    # ---- 검사 영역 지정 (yolo_live.select_roi 를 화면 안에서 하는 버전)
+    # ---- 학습 좌표 확인 (임의 다각형 ROI 로 바꾸지 않는다)
     def begin_roi(self):
-        self.engine.send("stop")
-        _, raw = self.engine.latest()
-        if raw is None:
-            return
-        self.edit_frame = raw.copy()
-        self.points.clear()
-        self.editing = True
-        self.roi_box.pack(fill="x", pady=(8, 0), after=self.btn_roi.master)
-        self._sync_buttons()
-
-    def end_roi(self):
-        self.editing = False
-        self.roi_box.pack_forget()
-        self._sync_buttons()
+        messagebox.showinfo("고정 ROI", "ROI 크기: 가로 600 × 세로 320\n"
+                            f"시작 좌표: x={config.ROI_X}, y={config.ROI_Y}\n"
+                            "위치 변경은 config.py의 ROI_X / ROI_Y를 학습 당시 값으로 설정한 뒤 재시작하세요.")
 
     def _sync_buttons(self):
         """버튼 잠금: 검사 영역 지정 중엔 전부 잠금. 3D·YOLO 검사 중엔 시작 버튼 잠금. YOLO 는 치수 합격 뒤에만"""
-        busy = self.vars["status"].get() in BUSY
-        locked = self.editing
+        status = self.vars["status"].get()
+        busy = status in BUSY or status.startswith("PatchCore ")
+        locked = False
         enabled = {self.btn_3d: not locked and not busy,
                    self.btn_go: not locked and bool(self.go_label),
                    self.btn_start: not locked and not busy and self.yolo_ready,
@@ -904,26 +1025,6 @@ class App:
                    self.btn_cam: not locked and not busy}
         for b, ok in enabled.items():
             b.state(["!disabled"] if ok else ["disabled"])
-
-    def save_roi(self):
-        try:
-            selected = live.validate_roi(self.points)
-            live.save_roi(selected, self.edit_frame)
-        except (ValueError, OSError) as exc:
-            messagebox.showwarning("검사 영역", str(exc))
-            return
-        self.engine.send("roi", selected)
-        self.end_roi()
-
-    def _click(self, event):
-        if self.editing and self.photo is not None:
-            w, h = self.photo.width(), self.photo.height()
-            if 0 <= event.x < w and 0 <= event.y < h:
-                self.points.append((event.x / (w - 1), event.y / (h - 1)))
-
-    def _undo(self, _event):
-        if self.editing and self.points:
-            self.points.pop()
 
     # ---- 화면 갱신
     def _tick(self):
@@ -953,24 +1054,10 @@ class App:
             self.vars["status"].set("대기")
 
         self._sync_buttons()
-        picture = self._roi_preview() if self.editing else self.engine.latest()[0]
+        picture = self.engine.latest()[0]
         if picture is not None:
             self._show(picture)
         self.root.after(30, self._tick)
-
-    def _roi_preview(self):
-        picture = self.edit_frame.copy()
-        h, w = picture.shape[:2]
-        if self.points:
-            vertices = np.array([(round(x * (w - 1)), round(y * (h - 1))) for x, y in self.points], np.int32)
-            if len(self.points) >= 3:
-                overlay = picture.copy()
-                cv2.fillPoly(overlay, [vertices], (80, 210, 150))
-                picture = cv2.addWeighted(overlay, 0.2, picture, 0.8, 0)
-            cv2.polylines(picture, [vertices], len(self.points) >= 3, (80, 210, 150), 2)
-            for v in vertices:
-                cv2.circle(picture, tuple(int(c) for c in v), 5, (80, 210, 150), -1)
-        return picture
 
     def _show(self, picture):
         cw = max(self.canvas.winfo_width(), 100)

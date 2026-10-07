@@ -32,8 +32,17 @@ DIM_LIMITS_3D = {"depth": (3.5, 5.5)}
 import os as _os
 STATION_3D_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "station_3d", "scanner_v2_6")
 
-# ---- YOLO 검사 카메라 번호 (OpenCV/DirectShow). 카메라를 더 꽂으면 번호가 밀리므로 camera_check.py 로 확인
-CAMERA_INDEX = 5
-# 카메라 해상도 (비워 두면 카메라 기본값). 바꾸면 영상 비율이 달라져 [검사 영역 설정]을 다시 해야 함
-CAMERA_WIDTH = 1920
+# ---- 카메라 / 학습 당시의 고정 ROI (PatchCore·YOLO 공통, 좌표는 원본 픽셀 기준. PREPROCESSING.md 참고)
+CAMERA_INDEX = 5           # YOLO 검사 카메라 번호 (OpenCV/DirectShow). 카메라를 더 꽂으면 번호가 밀리므로 camera_check.py 로 확인
+CAMERA_WIDTH = 1920        # 카메라가 이 크기(1920×1080)를 못 돌려주면 오류로 중단한다 (자동 확대하지 않음)
 CAMERA_HEIGHT = 1080
+ROI_WIDTH = 600
+ROI_HEIGHT = 320
+ROI_X = 640                # 학습·양품 촬영 기록에서 확인한 원본 픽셀 좌표 (왼쪽 위). 좌표를 모르면 임의로 바꾸지 말 것
+ROI_Y = 390
+YOLO_IMGSZ = 608           # YOLO 입력 크기: ROI 를 letterbox 로 608 에 맞춤 (직접 정사각형 resize 안 함)
+
+# ---- PatchCore (1단계 검사, inspection_app.py)
+PATCHCORE_VIEWS = 72       # 한 바퀴에 멈춰서 찍는 장수 (72 → 5도씩. 8 → 45도씩)
+# PatchCore 모델 파일. 비워 두면 inspection/visionPatchCore/patchcore_export/models/v3/model.ckpt
+# PATCHCORE_MODEL = r"C:\...\models\v4\model.ckpt"

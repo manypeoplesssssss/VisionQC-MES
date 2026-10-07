@@ -7,8 +7,8 @@ GET /api/dashboard/hourly?date=YYYY-MM-DD       시간대별 검사·불량 수 
 GET /api/dashboard/daily?date_from=&date_to=    일별 검사·불량 수 (기간, 기본 최근 14일)
 
 검사 1회 = product_inspection 1행. 시각은 created_at(검사 시작 시각) 기준.
-불량 = 치수 불합격(DIMENSION_DEFECT) + YOLO 결함(PROCESS_DEFECT)
-대기 = DIMENSION_PENDING + YOLO_PENDING (PatchCore 는 검사 흐름에서 제외)
+불량 = 치수 불합격(DIMENSION_DEFECT) + PatchCore 불합격(YOLO_PENDING, PROCESS_DEFECT)
+대기 = DIMENSION_PENDING + PATCHCORE_PENDING
 """
 from collections import Counter, defaultdict
 from datetime import date, timedelta
@@ -57,12 +57,13 @@ def summary(
     alarms_today = db.scalar(select(func.count()).select_from(A).where(A.occurred_at >= start, A.occurred_at < end))
 
     by_final = {f.value: 0 for f in FinalResult}   # 0건인 결과도 나오게
-    stages = {"DIMENSION": Counter(), "YOLO": Counter()}
+    stages = {"DIMENSION": Counter(), "PATCHCORE": Counter(), "YOLO": Counter()}
     products: dict[str, Counter] = defaultdict(Counter)
     classes, codes = Counter(), Counter()
     for r in rows:
         by_final[r.final_result] += 1
         stages["DIMENSION"][_v(r.dimension_result)] += 1
+        stages["PATCHCORE"][_v(r.patchcore_result)] += 1
         stages["YOLO"][_v(r.yolo_status)] += 1
         group = "defect" if r.final_result in DEFECT_RESULTS else "pending" if r.final_result in PENDING_RESULTS else "normal"
         products[r.product_name][group] += 1

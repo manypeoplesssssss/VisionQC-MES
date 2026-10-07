@@ -20,8 +20,8 @@
  ┌──────────── 검사 라인 (검사 PC) ────────────┐
  │  제품 redcar  검사번호 20261006_inspection_143000_001
  │   ① 3D 스캔 → 치수 (가로/길이/높이)          │
- │   ② 치수 합격이면 YOLO → 결함 사진            │
- │      (PatchCore 는 검사 흐름에서 제외)        │
+ │   ② 치수 합격이면 PatchCore → 이상 점수       │
+ │   ③ PatchCore 불합격이면 YOLO → 결함 사진     │
  └───────┬────────────────────────────────────┘
          │ db_client.py — DB 에 직접 저장 (사진은 MES 사진 폴더로 복사)
          │ (예전 방식: mes_client.py → 아래 HTTP API. 서버에 남아 있음)
@@ -46,7 +46,7 @@
 ```
 
 **검사 1회 = `product_inspection` 1행**이 이 시스템을 이해하는 핵심입니다.
-같은 제품을 다시 검사하면 새 검사번호로 새 행이 생깁니다. 단계(치수 → YOLO) 결과는 같은 행을 채워 나갑니다.
+같은 제품을 다시 검사하면 새 검사번호로 새 행이 생깁니다. 단계(치수 → PatchCore → YOLO) 결과는 같은 행을 채워 나갑니다.
 
 ---
 
@@ -109,7 +109,7 @@ VisionQC-MES/
 │  │  └─ example_pipeline.py        3단계 한 사이클 예시
 │  ├─ station_3d/                   3D 스캔 치수 검사 코드 (3D 담당, 수정하지 않음)
 │  ├─ bridge_3d/                    3D 측정 결과 → DB 저장 + handoff 기록 (save_3d_to_db.py)
-│  ├─ station_vision/               3D 검사 + YOLO (한 가상환경)
+│  ├─ station_vision/               3D 검사 + PatchCore → YOLO (한 가상환경)
 │  │  ├─ inspection_app.py          버튼 화면: 턴테이블 + YOLO + MES 자동 전송 (--sim 시뮬레이션)
 │  │  ├─ yolo_live.py               키보드 조작 검사 프로그램 (검사 영역, 촬영 로직)
 │  │  ├─ turntable.py · turntable/turntable.ino   아두이노 턴테이블
@@ -219,7 +219,7 @@ JSON 컬럼 원소
 
 | 결정 | 이유 |
 |---|---|
-| 검사 1회 = 한 행 | 한 제품의 검사 결과(치수 → YOLO)를 한 줄로 보고, 최종 결과를 행 안에서 바로 계산 |
+| 검사 1회 = 한 행 | 한 제품의 검사 결과(치수 → PatchCore → YOLO)를 한 줄로 보고, 최종 결과를 행 안에서 바로 계산 |
 | 합불·최종 결과를 DB 생성 컬럼으로 | 앱이 계산을 빼먹거나 규칙이 어긋날 수 없음. MySQL 에서 직접 넣어도 같은 결과 |
 | 치수는 별도 테이블 + 기준값 함께 저장 | 기준이 바뀌어도 그 당시 기준으로 판정이 남음. 치수 테이블 결과는 서버가 전체 검사 행에 반영 |
 | 결함·사진은 JSON 배열 | 한 검사에 사진·결함 수가 정해져 있지 않음. 사진 자체는 파일, DB 에는 경로만 |
@@ -250,15 +250,15 @@ storage/images/2026-10-06/2026-10-06-redcar-143005-YOLO-20261006_inspection_1430
 | 치수 축별 | 실측·기준 중 하나라도 없으면 `PENDING`, `|편차|` ≤ 정상 한계 `PASS`, ≤ 불량 한계 `RECHECK`(재검, 다시 스캔), 초과 `FAIL` (경계값은 좋은 쪽). 한계: 가로 ±1.5 / ±2.5, 길이(전폭) ±3.5 / ±5.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계) = `models.py` 의 `DIM_RECHECK_MM` / `DIM_TOLERANCE_MM`, 3D 코드 `station_3d/config.py` 와 같은 값 |
 | 치수 종합 | 하나라도 `FAIL` → `FAIL`, (FAIL 없이) 누락 → `PENDING`, 하나라도 `RECHECK` → `RECHECK`, 셋 다 `PASS` → `PASS`. `RECHECK` 는 최종 결과에서 `DIMENSION_PENDING` |
 | 기준 치수 | 검사 PC 가 보낸 값 > 서버 설정 `PRODUCT_STANDARDS[제품]` |
-| PatchCore | 검사 흐름에서 제외. `patchcore_*` 컬럼과 API 는 남아 있지만 최종 결과에 영향을 주지 않음 |
-| 최종 결과 | 치수 대기·재검 → `DIMENSION_PENDING` / 치수 불합격 → `DIMENSION_DEFECT` / 치수 합격 + YOLO 미완료 → `YOLO_PENDING` / YOLO 완료 + 결함 없음 → `NORMAL` / YOLO 완료 + 결함 있음 → `PROCESS_DEFECT` |
-| 불량 · 대기 묶음 | 불량 = `DIMENSION_DEFECT` + `PROCESS_DEFECT`, 대기 = `DIMENSION_PENDING` + `YOLO_PENDING` |
+| PatchCore | 이상 점수 ≥ 기준 → `FAIL`, 아니면 `PASS` (서버 판정, 기준값을 같이 저장) |
+| 최종 결과 | 치수 대기 → `DIMENSION_PENDING` / 치수 불합격 → `DIMENSION_DEFECT` / PatchCore 대기 → `PATCHCORE_PENDING` / PatchCore 합격 → `NORMAL` / PatchCore 불합격 + YOLO 완료 → `PROCESS_DEFECT` / 그 외 → `YOLO_PENDING` |
+| 불량 · 대기 묶음 | 불량 = `DIMENSION_DEFECT` + `YOLO_PENDING` + `PROCESS_DEFECT`, 대기 = `DIMENSION_PENDING` + `PATCHCORE_PENDING` |
 | 불량률 | 불량 ÷ (정상 + 불량) × 100. 대기는 제외 |
 | 날짜 귀속 | 검사 시작 시각(`created_at`) 기준 |
 | 장비 안전 | 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 검사 테이블 2개의 `centering_state`(OFF/ON/UNKNOWN), `interlock_state`(0/1/UNKNOWN)에 마지막 확인 값 기록. 이상이면 조건마다 알람 1행 (같은 검사·단계·상태의 발생 중 알람이 있으면 중복 안 만듦). 코드: `services/safety.py` |
 | 권장 조치 | 결함에 지정된 불량 코드들의 `[코드 이름] 원인 후보: … / 권장 조치: …` 를 모아 `recommended_action` 에 저장 |
 
-YOLO 가 끝나기 전에는 정상으로 바꾸지 않습니다 (`YOLO_PENDING`). 결함 유무는 `yolo_defect_data` 배열 길이로 DB 가 판단합니다.
+PatchCore 가 불합격이면 YOLO 가 불량 유형을 분류하지 못하더라도 정상으로 바꾸지 않습니다 (`YOLO_PENDING` / `PROCESS_DEFECT`).
 
 ---
 
@@ -314,7 +314,7 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
 
 | 파라미터 | 예 | 설명 |
 |---|---|---|
-| `final_result` | `PROCESS_DEFECT` / `DEFECT` / `PENDING` | 최종 결과 5가지, 또는 불량 전체·판정 전 전체 묶음 |
+| `final_result` | `PROCESS_DEFECT` / `DEFECT` / `PENDING` | 최종 결과 6가지, 또는 불량 전체·판정 전 전체 묶음 |
 | `product_name` | `redcar` | 제품 모델 |
 | `serial` | `0012` | 제품번호·검사번호 부분 검색 |
 | `date_from`, `date_to` | `2026-10-01` | 기간 (종료일 포함). 둘 다 없으면 전체 기간 |
@@ -330,7 +330,7 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
     "created_at": "2026-10-06T14:35:48" } ] }
 ```
 
-**GET /api/inspections/{inspection_id}** — 상세: 위 + `dimension_data`, `dimension`(축별), `defects[]`(index, 사진 번호, 결함 종류, 신뢰도, box, 각도, 불량 코드·이름), `images[]`(경로 + 서명된 `original_url`/`annotated_url`), `recommended_action`, 리포트 정보
+**GET /api/inspections/{inspection_id}** — 상세: 위 + `dimension_data`, `dimension`(축별), PatchCore 점수·기준, `defects[]`(index, 사진 번호, 결함 종류, 신뢰도, box, 각도, 불량 코드·이름), `images[]`(경로 + 서명된 `original_url`/`annotated_url`), `recommended_action`, 리포트 정보
 
 **PUT /api/inspections/{inspection_id}/defects/{index}** — 관리자. `{ defect_code: "D04" | null }` → 원인 후보·권장 조치 다시 모음
 
@@ -353,7 +353,7 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
 ```json
 {
   "date": "2026-10-06", "total": 33, "normal": 26, "defect": 6, "pending": 1, "defect_rate": 18.75,
-  "by_final": { "DIMENSION_PENDING": 1, "DIMENSION_DEFECT": 3, "NORMAL": 26, "YOLO_PENDING": 0, "PROCESS_DEFECT": 3 },
+  "by_final": { "DIMENSION_PENDING": 1, "DIMENSION_DEFECT": 3, "PATCHCORE_PENDING": 0, "NORMAL": 26, "YOLO_PENDING": 0, "PROCESS_DEFECT": 3 },
   "by_stage": [ { "stage": "DIMENSION", "counts": { "PASS": 29, "FAIL": 3, "PENDING": 1 } }, ... ],
   "by_product": [ { "product_name": "redcar", "total": 33, "normal": 26, "defect": 6, "pending": 1 } ],
   "defect_classes": [ { "label": "white_paint", "count": 11 }, ... ],
