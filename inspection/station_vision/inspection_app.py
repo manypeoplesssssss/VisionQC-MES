@@ -59,6 +59,7 @@ VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
 # 3D 검사: station_3d 의 스크립트를 이 폴더에서 그대로 실행한다 (코드는 건드리지 않음)
 STATION_3D = Path(getattr(config, "STATION_3D_DIR", None) or ROOT.parent / "station_3d")
 BRIDGE_3D = ROOT.parent / "bridge_3d" / "save_3d_to_db.py"
+RUN_3D = ROOT.parent / "bridge_3d" / "run_3d_script.py"  # 3D 스크립트 실행기 (3D 코드 수정 없이 포트만 덮어씀)
 PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스크립트를 돌릴 파이썬 (기본: 이 프로그램과 같은 환경)
 # 이 상태일 때는 검사 시작 버튼을 잠근다
 BUSY = ("3D 검사 중", "YOLO 검사 중")
@@ -347,7 +348,8 @@ class Engine(threading.Thread):
             self._submit_safety("PRECHECK", centering, interlock, None, "3D 검사 시작 전 확인")
             return camera, table, last_frame
         settings = self.mes_settings()
-        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "VISIONQC_DB_URL": settings["db_url"]}
+        env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "VISIONQC_DB_URL": settings["db_url"],
+               "VISIONQC_3D_SERIAL_PORT": config.SERIAL_PORT}  # 턴테이블은 3D·YOLO 가 같은 아두이노
         bridge = [PYTHON_3D, "-u", str(BRIDGE_3D), "--product", settings["product"],
                   "--centering", centering, "--interlock", interlock]
         if settings["serial"]:
@@ -365,14 +367,15 @@ class Engine(threading.Thread):
                 camera = table = None
                 scans = STATION_3D / "scans"
                 before = {d.name for d in scans.glob("*")} if scans.is_dir() else set()
-                done = self._run_proc([PYTHON_3D, "-u", "turntable_scan.py"], STATION_3D, env) == 0
+                done = self._run_proc([PYTHON_3D, "-u", str(RUN_3D), str(STATION_3D), "turntable_scan.py"], ROOT, env) == 0
                 session = self._newest_session(before) if done else None
                 for step in ("merge_turntable_scans.py", "measure_object.py"):
                     if not session:
                         break
                     self._log(f"3D 단계: {step}")
                     extra = ["--no-view"] if step.startswith("merge") else []
-                    done = self._run_proc([PYTHON_3D, "-u", step, str(session), *extra], STATION_3D, env) == 0
+                    done = self._run_proc([PYTHON_3D, "-u", str(RUN_3D), str(STATION_3D), step, str(session), *extra],
+                                          ROOT, env) == 0
                     if not done:
                         break
                 done = bool(session) and done and self._run_proc(bridge + [str(session)], ROOT, env) == 0

@@ -59,7 +59,7 @@ cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_visio
 
 장비 없이 시험: `inspection_app.py --sim` (3D 는 가짜 측정값, 결과는 `--sim-3d fail` / `recheck` 로 바꿈).
 3D 없이 YOLO 만 시험: `inspection_app.py --no-gate` (② 잠금 해제).
-실행 전 확인: 아두이노 IDE 의 시리얼 모니터는 닫기, 카메라 앱 켜기. 3D 스크립트의 포트는 `station_3d\config.py` 의 `SERIAL_PORT`, YOLO 는 `station_vision\config.py` 의 `SERIAL_PORT`.
+실행 전 확인: 아두이노 IDE 의 시리얼 모니터는 닫기, 카메라 앱 켜기. 턴테이블 포트는 `station_vision\config.py` 의 `SERIAL_PORT` 하나로 정합니다 (3D 스크립트에도 이 값을 넘겨 주므로 `station_3d` 의 `COM6` 설정은 바뀌지 않고 무시됨).
 
 **처음 한 번 (이 PC 는 이미 해 둠)** — 3D 패키지를 같은 환경에 설치:
 ```powershell
