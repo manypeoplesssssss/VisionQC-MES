@@ -229,15 +229,43 @@ class Engine(threading.Thread):
     def _state(self, **values):
         self.events.put(("state", values))
 
-    def _open_hw(self):
-        """카메라·턴테이블 연결 (3D 검사 뒤에 다시 연결할 때도 쓴다)"""
+    def _open_table(self):
+        """턴테이블 연결 (3D 검사 뒤에 다시 연결할 때도 쓴다)"""
         if self.sim:
-            self.camera, self.table = SimCamera(), SimTurntable()
+            self.table = SimTurntable()
         else:
-            self.camera = live.LatestCamera()
             self.table = live.Turntable(port=config.SERIAL_PORT)
             self.table.stop()  # 이미 회전 중인 보드도 정지 상태로 맞춘다
-        return self.camera, self.table
+        return self.table
+
+    def _open_camera(self):
+        """YOLO 카메라 연결. 아직 안 켜져 있으면 None (아이폰 카메라 등은 나중에 켜도 된다)"""
+        if self.camera is not None:
+            return self.camera
+        try:
+            self.camera = SimCamera() if self.sim else live.LatestCamera()
+        except RuntimeError as exc:
+            self.camera = None
+            self._log(f"YOLO 카메라(번호 {getattr(config, 'CAMERA_INDEX', 1)})를 열지 못했습니다: {exc}. "
+                      "카메라(아이폰 등)를 켠 뒤 [카메라 연결]이나 ② 를 누르세요")
+        return self.camera
+
+    def _camera_ready(self, camera, last_frame):
+        """카메라를 새로 연결했을 때 검사 영역을 불러오고 화면 갱신용 프레임을 받는다. 반환 (camera, last_frame)"""
+        if camera is None:
+            return None, last_frame
+        frame, last_frame = camera.fresh()
+        if not live.ROI_NORMALIZED:
+            live.ROI_NORMALIZED = live.load_roi(frame)
+        self._log("YOLO 카메라 연결 완료" + ("" if live.ROI_NORMALIZED else " - [검사 영역 설정]을 먼저 하세요"))
+        return camera, last_frame
+
+    @staticmethod
+    def _no_camera_picture():
+        picture = np.full((360, 640, 3), 30, np.uint8)
+        cv2.putText(picture, "YOLO camera not connected", (90, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 200, 200), 2)
+        cv2.putText(picture, "turn it on, then press Connect", (110, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1)
+        return picture
 
     def _close_hw(self):
         """연결을 닫는다. 3D 스크립트가 같은 턴테이블 포트·카메라를 쓰기 때문에 3D 검사 동안은 놓아 준다"""
@@ -260,12 +288,10 @@ class Engine(threading.Thread):
             names = set(model.names.values())
             if not live.DEFECT_CLASSES.intersection(names):
                 raise RuntimeError(f"모델에 결함 클래스가 없습니다: {names}")
-            camera, table = self._open_hw()
+            table = self._open_table()
             if self.sim:
                 self._log("시뮬레이션 모드: captures 사진을 카메라 대신, 가짜 3D 측정값을 사용합니다")
-            frame, last_frame = camera.fresh()
-            live.ROI_NORMALIZED = live.load_roi(frame)
-            self._log("연결 완료" + ("" if live.ROI_NORMALIZED else " - [검사 영역 설정]을 먼저 하세요"))
+            camera, last_frame = self._camera_ready(self._open_camera(), 0.0)
             self._refresh_gate()
             self._loop(model, camera, table, last_frame)
         except Exception as exc:
@@ -381,8 +407,7 @@ class Engine(threading.Thread):
                 done = bool(session) and done and self._run_proc(bridge + [str(session)], ROOT, env) == 0
         finally:
             if not self.sim:
-                camera, table = self._open_hw()  # 3D 가 놓아 준 장비를 다시 연결
-                _, last_frame = camera.fresh()
+                table = self._open_table()  # 3D 가 놓아 준 턴테이블을 다시 연결. 카메라는 ② 를 누를 때 연결
         handoff, ready = self._refresh_gate()
         if not done:
             self._log("3D 검사가 끝까지 되지 않았습니다 (정지했거나 오류). 위 3D 출력과 DB 연결을 확인하세요")
@@ -452,12 +477,18 @@ class Engine(threading.Thread):
         folder = None
         last_poll = 0.0
         while True:
-            frame, last_frame = camera.fresh(after=last_frame)
-            result = live.inspect_roi(model, frame) if live.ROI_NORMALIZED else None
-            found = live.capture_defects(result) if result is not None else []
-            picture = live.annotated_frame(result) if result is not None else frame.copy()
-            with self.frame_lock:
-                self.view, self.raw = picture, frame
+            if camera is None:
+                time.sleep(0.1)
+                result, found = None, []
+                with self.frame_lock:
+                    self.view, self.raw = self._no_camera_picture(), None
+            else:
+                frame, last_frame = camera.fresh(after=last_frame)
+                result = live.inspect_roi(model, frame) if live.ROI_NORMALIZED else None
+                found = live.capture_defects(result) if result is not None else []
+                picture = live.annotated_frame(result) if result is not None else frame.copy()
+                with self.frame_lock:
+                    self.view, self.raw = picture, frame
 
             # ---- 버튼 명령 처리
             try:
@@ -477,12 +508,20 @@ class Engine(threading.Thread):
                 if not running:
                     camera, table, last_frame = self._scan_3d(camera, table, last_frame)
                 continue
+            if command == "camera":
+                if camera is None:
+                    camera, last_frame = self._camera_ready(self._open_camera(), last_frame)
+                continue
             if command == "roi":
                 live.ROI_NORMALIZED = value
                 self._log("검사 영역을 적용했습니다")
                 self._state(status="대기")
                 continue
             if command == "start" and not running:
+                if camera is None:
+                    camera, last_frame = self._camera_ready(self._open_camera(), last_frame)
+                    if camera is None:
+                        continue
                 if not live.ROI_NORMALIZED:
                     self._log("[검사 영역 설정]을 먼저 하세요")
                     continue
@@ -621,7 +660,8 @@ class App:
         self.btn_start = ttk.Button(box, text="② ▶ YOLO 검사 시작", command=lambda: self.engine.send("start"))
         self.btn_stop = ttk.Button(box, text="■ 정지", command=lambda: self.engine.send("stop"))
         self.btn_roi = ttk.Button(box, text="검사 영역 설정", command=self.begin_roi)
-        for b in (self.btn_3d, self.btn_start, self.btn_stop, self.btn_roi):
+        self.btn_cam = ttk.Button(box, text="YOLO 카메라 연결", command=lambda: self.engine.send("camera"))
+        for b in (self.btn_3d, self.btn_start, self.btn_stop, self.btn_roi, self.btn_cam):
             b.pack(fill="x", pady=2)
         ttk.Label(box, text="3D 치수가 합격이면 ② 가 켜집니다", foreground="#6b7686").pack(anchor="w")
 
@@ -728,7 +768,8 @@ class App:
         locked = self.editing
         enabled = {self.btn_3d: not locked and not busy,
                    self.btn_start: not locked and not busy and self.yolo_ready,
-                   self.btn_stop: not locked, self.btn_roi: not locked and not busy}
+                   self.btn_stop: not locked, self.btn_roi: not locked and not busy,
+                   self.btn_cam: not locked and not busy}
         for b, ok in enabled.items():
             b.state(["!disabled"] if ok else ["disabled"])
 
