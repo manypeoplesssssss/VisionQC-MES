@@ -1,0 +1,76 @@
+// turntable.ino — 28BYJ-48 + ULN2003 + Arduino Uno 턴테이블
+// 필요 라이브러리: AccelStepper (Arduino IDE 라이브러리 매니저에서 설치)
+//
+// 배선: ULN2003 IN1->D8, IN2->D9, IN3->D10, IN4->D11
+//       드라이버 전원은 외부 5V 권장 (GND는 아두이노와 공통)
+//
+// 시리얼 명령 (115200bps, 줄바꿈 '\n'으로 끝):
+//   R<deg>   : 현재 위치에서 deg만큼 회전 (예: R10, R-15)  -> 완료 후 "DONE"
+//   A<deg>   : 절대 각도 deg로 이동 (예: A90)                -> "DONE"
+//              ※ 역방향 이동이 될 수 있어 백래시 오차 주의. 스캔에는 R만 사용.
+//   Z        : 현재 위치를 0도로 설정                         -> "DONE"
+//   P        : 현재 각도 출력                                 -> 예: "30.00"
+//
+// 변경 이력
+//   2026-09-28 도착 후 SETTLE_MS 동안 코일을 켠 채 대기한 뒤 DONE 전송
+//              (베어링이 없는 원판의 잔진동이 가라앉은 다음 촬영하도록)
+
+#include <AccelStepper.h>
+
+// 하프스텝 기준 실제 한 바퀴 스텝 수 (기어비 63.68395:1 반영, 흔히 쓰는 4096은 근사값)
+const float STEPS_PER_REV = 4075.7728;
+
+// 도착 후 대기 시간(ms). 사진이 흔들리면 늘리고, 스캔이 너무 느리면 줄인다.
+const unsigned long SETTLE_MS = 400;
+
+// HALF4WIRE 모드의 핀 순서는 IN1, IN3, IN2, IN4 순서여야 정상 회전함
+AccelStepper stepper(AccelStepper::HALF4WIRE, 8, 10, 9, 11);
+
+float targetDeg = 0.0;  // 누적 목표 각도 (반올림 오차 누적 방지용)
+
+long degToSteps(float deg) {
+  return lround(deg / 360.0 * STEPS_PER_REV);
+}
+
+void moveToDeg(float deg) {
+  targetDeg = deg;
+  stepper.enableOutputs();
+  stepper.moveTo(degToSteps(targetDeg));
+  stepper.runToPosition();   // 가감속 포함, 도착할 때까지 블로킹
+  delay(SETTLE_MS);          // 코일을 켠 채로 위치를 잡고 잔진동이 가라앉기를 기다림
+  stepper.disableOutputs();  // 코일 전류 차단 (발열 감소, 기어비 덕분에 잘 안 밀림)
+  Serial.println("DONE");
+}
+
+void setup() {
+  Serial.begin(115200);
+  stepper.setMaxSpeed(700);      // 하프스텝/초 (약 10rpm) — 너무 높이면 탈조
+  stepper.setAcceleration(350);  // 부드러운 출발/정지로 물체 흔들림 방지
+  stepper.disableOutputs();
+  Serial.println("READY");
+}
+
+void loop() {
+  if (!Serial.available()) return;
+
+  String line = Serial.readStringUntil('\n');
+  line.trim();
+  if (line.length() == 0) return;
+
+  char cmd = toupper(line.charAt(0));
+  float value = line.substring(1).toFloat();
+
+  if (cmd == 'R') {
+    moveToDeg(targetDeg + value);
+  } else if (cmd == 'A') {
+    moveToDeg(value);
+  } else if (cmd == 'Z') {
+    stepper.setCurrentPosition(0);
+    targetDeg = 0.0;
+    Serial.println("DONE");
+  } else if (cmd == 'P') {
+    Serial.println(stepper.currentPosition() * 360.0 / STEPS_PER_REV, 2);
+  } else {
+    Serial.println("ERR");
+  }
+}

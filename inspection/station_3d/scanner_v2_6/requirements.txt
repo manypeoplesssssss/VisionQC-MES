@@ -1,0 +1,7 @@
+# Python 3.11 / 3.12 (Open3D는 3.13 미지원)
+pyrealsense2>=2.55
+open3d>=0.19   # numpy 2.x 호환
+opencv-python>=4.8
+numpy>=1.24
+pyserial>=3.5
+pytest>=7   # tests/ 실행용 (선택)
