@@ -28,3 +28,6 @@ BACKLASH_TAKEUP_DEG = 8.0
 
 # ---- YOLO 검사 카메라 번호 (OpenCV/DirectShow). 카메라를 더 꽂으면 번호가 밀리므로 camera_check.py 로 확인
 CAMERA_INDEX = 5
+# 카메라 해상도 (비워 두면 카메라 기본값). 바꾸면 영상 비율이 달라져 [검사 영역 설정]을 다시 해야 함
+CAMERA_WIDTH = 1920
+CAMERA_HEIGHT = 1080

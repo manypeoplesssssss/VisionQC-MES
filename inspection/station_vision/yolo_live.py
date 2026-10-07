@@ -223,6 +223,10 @@ class LatestCamera:
         if not self.cap.isOpened():
             self.cap.release()
             raise RuntimeError("카메라 연결 실패")
+        width, height = getattr(config, "CAMERA_WIDTH", None), getattr(config, "CAMERA_HEIGHT", None)
+        if width and height:  # 해상도 지정 (카메라가 지원하지 않으면 가장 가까운 값으로 열림)
+            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
         self.lock = threading.Lock()
         self.frame = None        # 가장 최근 프레임
         self.timestamp = 0.0     # 그 프레임을 받은 시각 (time.monotonic)
