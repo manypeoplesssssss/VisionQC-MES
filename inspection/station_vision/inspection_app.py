@@ -60,6 +60,7 @@ VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
 # 3D 검사: station_3d 의 스크립트를 이 폴더에서 그대로 실행한다 (코드는 건드리지 않음)
 STATION_3D = Path(getattr(config, "STATION_3D_DIR", None) or ROOT.parent / "station_3d")
 BRIDGE_3D = ROOT.parent / "bridge_3d" / "save_3d_to_db.py"
+GO_FILE = ROOT / "captures" / "3d_go.flag"  # 화면 버튼 → 3D 스캔 대기 해제 신호 (wait_patch.py 가 이 파일을 본다)
 RUN_3D = ROOT.parent / "bridge_3d" / "run_3d_script.py"  # 3D 스크립트 실행기 (3D 코드 수정 없이 포트만 덮어씀)
 PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스크립트를 돌릴 파이썬 (기본: 이 프로그램과 같은 환경)
 # 이 상태일 때는 검사 시작 버튼을 잠근다
@@ -418,6 +419,9 @@ class Engine(threading.Thread):
                 command, value = self.commands.get_nowait()
             except queue.Empty:
                 command = value = None
+            if command == "go3d":  # [배경 촬영]·[스캔 시작] 버튼: 3D 스캔의 Space 대기를 넘긴다
+                GO_FILE.parent.mkdir(parents=True, exist_ok=True)
+                GO_FILE.write_text("go", encoding="utf-8")
             if command in ("stop", "quit"):
                 proc.terminate()
                 try:
@@ -433,6 +437,18 @@ class Engine(threading.Thread):
                 continue
             if line is None:
                 return proc.wait()
+            if line.startswith("@@WAIT "):  # 3D 스캔이 Space 를 기다리는 중 → 해당 버튼을 켠다
+                kind = line.split()[1]
+                label, hint = {
+                    "background": ("① 배경 촬영", "턴테이블을 비운 뒤 [① 배경 촬영]을 누르세요 (카메라 창에서 Space 도 됨)"),
+                    "scan": ("② 스캔 시작", "물체를 턴테이블 중앙에 올린 뒤 [② 스캔 시작]을 누르세요. 누르면 턴테이블이 돌며 스캔합니다"),
+                }.get(kind, ("진행", "준비되면 [진행]을 누르세요"))
+                self._state(go_label=label)
+                self._log("3D 대기: " + hint)
+                continue
+            if line.startswith("@@GO"):
+                self._state(go_label="")
+                continue
             if line.strip():
                 self._log("  3D | " + line[:160])
                 if self.log3d is not None:  # 화면 기록은 지워지므로 3D 출력 전체를 파일에도 남긴다
@@ -469,7 +485,7 @@ class Engine(threading.Thread):
             return camera, table, last_frame
         settings = self.mes_settings()
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "VISIONQC_DB_URL": settings["db_url"],
-               "VISIONQC_3D_SERIAL_PORT": config.SERIAL_PORT}  # 턴테이블은 3D·YOLO 가 같은 아두이노
+               "VISIONQC_3D_SERIAL_PORT": config.SERIAL_PORT, "VISIONQC_3D_GO_FILE": str(GO_FILE)}  # 턴테이블은 3D·YOLO 가 같은 아두이노
         bridge = [PYTHON_3D, "-u", str(BRIDGE_3D), "--product", settings["product"],
                   "--centering", centering, "--interlock", interlock]
         if settings["serial"]:
@@ -507,6 +523,7 @@ class Engine(threading.Thread):
                         break
                 done = bool(session) and done and self._run_proc(bridge + [str(session)], ROOT, env) == 0
         finally:
+            self._state(go_label="")
             self.log3d.close()
             self.log3d = None
             if not self.sim:
@@ -768,12 +785,14 @@ class App:
         box = ttk.LabelFrame(side, text="검사", padding=8)
         box.pack(fill="x")
         self.btn_3d = ttk.Button(box, text="① 3D 검사", command=lambda: self.engine.send("scan3d"))
+        self.btn_go = ttk.Button(box, text="3D 진행 버튼 (스캔 중 켜짐)", command=lambda: self.engine.send("go3d"))
         self.btn_start = ttk.Button(box, text="② ▶ YOLO 검사 시작", command=lambda: self.engine.send("start"))
         self.btn_stop = ttk.Button(box, text="■ 정지", command=lambda: self.engine.send("stop"))
         self.btn_roi = ttk.Button(box, text="검사 영역 설정", command=self.begin_roi)
         self.btn_cam = ttk.Button(box, text="YOLO 카메라 연결", command=lambda: self.engine.send("camera"))
-        for b in (self.btn_3d, self.btn_start, self.btn_stop, self.btn_roi, self.btn_cam):
+        for b in (self.btn_3d, self.btn_go, self.btn_start, self.btn_stop, self.btn_roi, self.btn_cam):
             b.pack(fill="x", pady=2)
+        self.go_label = ""
         ttk.Label(box, text="3D 치수가 합격이면 ② 가 켜집니다", foreground="#6b7686").pack(anchor="w")
 
         self.roi_box = ttk.LabelFrame(side, text="검사 영역 설정", padding=8)
@@ -878,6 +897,7 @@ class App:
         busy = self.vars["status"].get() in BUSY
         locked = self.editing
         enabled = {self.btn_3d: not locked and not busy,
+                   self.btn_go: not locked and bool(self.go_label),
                    self.btn_start: not locked and not busy and self.yolo_ready,
                    self.btn_stop: not locked, self.btn_roi: not locked and not busy,
                    self.btn_cam: not locked and not busy}
@@ -917,6 +937,9 @@ class App:
                 for k, v in value.items():
                     if k == "yolo_ready":
                         self.yolo_ready = bool(v)
+                    elif k == "go_label":
+                        self.go_label = v
+                        self.btn_go.config(text=v or "3D 진행 버튼 (스캔 중 켜짐)")
                     else:
                         self.vars[k].set(f"{v:.1f}°" if k == "angle" else str(v))
             elif kind == "pending":
