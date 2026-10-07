@@ -18,7 +18,8 @@ MES 서버와 화면은 DB 에서 읽어서 보여 준다 (검사 PC → DB → 
 
     python inspection_app.py          # 실제 카메라 + 턴테이블
     python inspection_app.py --sim    # 장비 없이 시험 (captures 사진을 카메라 대신, 3D 는 가짜 측정값)
-    python inspection_app.py --no-gate  # 3D 없이 YOLO 만 시험 (치수 합격 잠금 해제)
+    python inspection_app.py --no-gate  # 3D 없이 시험 (치수 합격 잠금 해제)
+    python inspection_app.py --patchcore-only  # PatchCore 만 (3D·YOLO 없이)
 
 DB 저장 (검사 1회 = product_inspection 1행)
     - 한 바퀴 검사 1회 = DB 검사 1행. 검사번호 = 날짜_검사폴더이름 (예: 20261006_inspection_143000_001)
@@ -279,8 +280,9 @@ class Engine(threading.Thread):
     """카메라·턴테이블·YOLO 를 다루는 스레드. 화면(Tk)은 건드리지 않고 events 큐로만 알린다.
     흐름은 yolo_live.main() 과 같다: 시작 → 연속 회전 → 0.80 이상 결함 → 정지·재검출·저장 → 재회전"""
     def __init__(self, sim, events, sender, mes_settings, safety=lambda: ("UNKNOWN", "UNKNOWN"),
-                 gate_3d=True, sim_3d="pass", patchcore_on=lambda: True):
+                 gate_3d=True, sim_3d="pass", patchcore_on=lambda: True, patchcore_only=False):
         super().__init__(daemon=True)
+        self.patchcore_only = patchcore_only  # True: PatchCore 판정까지만 하고 YOLO 는 하지 않는다
         self.patchcore_on = patchcore_on  # 화면의 [PatchCore 먼저] 체크 상태
         self.patchcore = None             # PatchCoreInspector (불러오기 실패하면 None → PatchCore 검사 보류)
         self.sim = sim
@@ -760,7 +762,8 @@ class Engine(threading.Thread):
                     self._log("config.py의 학습 ROI 시작 좌표를 확인하세요")
                     continue
                 # 3D 검사에서 넘어온 검사번호가 있으면 이어받는다. 치수 불합격 제품은 비전 검사를 하지 않음
-                handoff = peek_handoff()
+                # 3D 잠금을 푼 시험 모드(--no-gate, --patchcore-only)는 예전 3D 검사번호에 붙이지 않고 새 검사로 저장한다
+                handoff = peek_handoff() if self.gate_3d else None
                 if handoff and handoff.get("safety_ok") is False:
                     consume_handoff(handoff)
                     self._log(f"3D 측정 때 장비 안전 이상({handoff['inspection_id']})이라 이어받지 않습니다. 다시 스캔하세요")
@@ -805,9 +808,13 @@ class Engine(threading.Thread):
                     self._submit("send_patchcore", score=score, threshold=pc.threshold, model_version=pc.version)
                     if score < pc.threshold:
                         self._log(f"PatchCore 합격 (최고 점수 {score:.3f} < 기준 {pc.threshold:.3f}) → YOLO 생략, 검사 완료")
-                        self._state(status="완료", verdict="PASS", angle=0.0)
+                        self._state(status="완료", verdict="PASS", angle=0.0, yolo_ready=not self.gate_3d)
                         continue
                     self.pc_failed = True
+                    if self.patchcore_only:
+                        self._log(f"PatchCore 불합격 (최고 점수 {score:.3f} ≥ 기준 {pc.threshold:.3f}) → PatchCore 전용 모드라 YOLO 는 하지 않음")
+                        self._state(status="완료", verdict="FAIL", angle=0.0, yolo_ready=not self.gate_3d)
+                        continue
                     self._log(f"PatchCore 불합격 (최고 점수 {score:.3f} ≥ 기준 {pc.threshold:.3f}) → YOLO 로 결함 확인")
                     self._state(verdict="PatchCore 불합격")
                     centering, interlock = self.safety()
@@ -884,14 +891,14 @@ class Engine(threading.Thread):
 
 # ---------------------------------------------------------------- 화면
 class App:
-    def __init__(self, root, sim, gate_3d=True, sim_3d="pass"):
+    def __init__(self, root, sim, gate_3d=True, sim_3d="pass", patchcore_only=False):
         self.root = root
         self.events = queue.Queue()
         self.sender = Sender(self.events)
         self.sender.start()
         self._patchcore_on = True
         self.engine = Engine(sim, self.events, self.sender, self.mes_settings, self.safety_state, gate_3d, sim_3d,
-                             lambda: self._patchcore_on)
+                             lambda: self._patchcore_on, patchcore_only)
         self.yolo_ready = not gate_3d
         self.photo = None
         self.view_scale = 1.0
@@ -1080,11 +1087,13 @@ def main():
     ap = argparse.ArgumentParser(description="VisionQC 버튼 검사 프로그램")
     ap.add_argument("--sim", action="store_true", help="카메라·턴테이블 없이 captures 사진으로 시험 (3D 는 가짜 측정값)")
     ap.add_argument("--sim-3d", choices=["pass", "recheck", "fail"], default="pass", help="--sim 일 때 가짜 3D 치수 결과")
-    ap.add_argument("--no-gate", action="store_true", help="3D 검사 없이 YOLO 를 바로 시작할 수 있게 함 (시험용)")
+    ap.add_argument("--no-gate", action="store_true", help="3D 검사 없이 [검사 시작]을 바로 누를 수 있게 함 (시험용)")
+    ap.add_argument("--patchcore-only", action="store_true", help="PatchCore 만 실행 (3D 검사·YOLO 없이. 판정까지만)")
     args = ap.parse_args()
     root = tk.Tk()
     root.geometry("1100x760")
-    App(root, args.sim, gate_3d=not args.no_gate, sim_3d=args.sim_3d)
+    only = args.patchcore_only
+    App(root, args.sim, gate_3d=not (args.no_gate or only), sim_3d=args.sim_3d, patchcore_only=only)
     root.mainloop()
 
 
