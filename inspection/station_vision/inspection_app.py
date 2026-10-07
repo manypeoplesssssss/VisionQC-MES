@@ -262,6 +262,7 @@ class Engine(threading.Thread):
         self.gate_3d = gate_3d  # True: 3D 치수 합격 뒤에만 YOLO 시작
         self.sim_3d = sim_3d    # 시뮬레이션의 가짜 3D 측정 결과 (pass / recheck / fail)
         self.camera = self.table = None
+        self.log3d = None           # 3D 출력 전체를 남기는 파일 (captures/3d_logs/)
         self.ready = not gate_3d    # 치수 합격으로 YOLO 검사가 가능한 상태인가
         self.force_yolo_view = False  # [YOLO 카메라 연결]을 눌렀으면 3D 검사 전에도 YOLO 카메라 영상을 보여 줌
         self.preview = None         # 3D 카메라 미리보기 (인텔 2대)
@@ -434,6 +435,9 @@ class Engine(threading.Thread):
                 return proc.wait()
             if line.strip():
                 self._log("  3D | " + line[:160])
+                if self.log3d is not None:  # 화면 기록은 지워지므로 3D 출력 전체를 파일에도 남긴다
+                    self.log3d.write(line + "\n")
+                    self.log3d.flush()
 
     def _newest_session(self, before):
         scans = STATION_3D / "scans"
@@ -470,6 +474,11 @@ class Engine(threading.Thread):
                   "--centering", centering, "--interlock", interlock]
         if settings["serial"]:
             bridge += ["--serial", settings["serial"]]
+        logs = ROOT / "captures" / "3d_logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        log_path = logs / f"{datetime.now():%Y%m%d_%H%M%S}.log"
+        self.log3d = open(log_path, "w", encoding="utf-8")
+        self._log(f"3D 출력 전체는 파일에도 저장됩니다: {log_path}")
         self._close_preview()  # 3D 스캔이 같은 인텔 카메라를 쓰므로 먼저 놓아 준다
         self.force_yolo_view = False
         self._state(status="3D 검사 중", dimension="-", yolo_ready=False, angle=0.0)
@@ -498,6 +507,8 @@ class Engine(threading.Thread):
                         break
                 done = bool(session) and done and self._run_proc(bridge + [str(session)], ROOT, env) == 0
         finally:
+            self.log3d.close()
+            self.log3d = None
             if not self.sim:
                 table = self._open_table()  # 3D 가 놓아 준 턴테이블을 다시 연결. 카메라는 ② 를 누를 때 연결
         handoff, ready = self._refresh_gate()
