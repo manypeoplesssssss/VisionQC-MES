@@ -409,7 +409,7 @@ db.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기�
 | 결함 박스 `box` | `[x1, y1, x2, y2]`, **원본 사진 픽셀 기준** | `[120, 80, 180, 130]` |
 | 신뢰도 `confidence` | 0 ~ 1 | `0.91` |
 | 기준 치수 | `bridge_3d` 가 3D `station_3d/config.py` 의 `NOMINAL_MM` 을 같이 저장 | `[194.50, 84.96, 58.68]` |
-| 판정 한계 | 모든 축(가로, 길이(전폭), 높이) ±6.0mm (정상 한계 = 불량 한계라 재검 구간 없음). 3D 코드 `TOLERANCE_MM` / `RECHECK_MM` 과 같은 값 | |
+| 판정 한계 | 가로 ±10.0, 길이(전폭)·높이 ±6.0mm (정상 한계 = 불량 한계라 재검 구간 없음). 3D 코드 `TOLERANCE_MM` / `RECHECK_MM` 과 같은 값 | |
 
 ### 7-6. DB 에 연결이 안 될 때
 `db_queue\` 폴더에 요청(사진 복사본 포함)이 쌓이고, 다음 저장 때 순서 그대로 자동으로 다시 저장합니다. 버튼 화면에는 "DB 대기 N" 과 경고가 보입니다.

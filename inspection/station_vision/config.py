@@ -24,7 +24,7 @@ BACKLASH_TAKEUP_DEG = 8.0
 # 축별 판정 한계 덮어쓰기 {축: (정상 한계, 불량 한계)} mm. 3D 코드(station_3d/config.py)는 수정하지 않고 실행할 때만 바꾼다.
 # 축 이름은 3D 코드 기준: width 가로 / depth 세로(짧은 변, MES 의 length) / height 높이
 # MES 쪽(backend/app/models.py 의 DIM_RECHECK_MM / DIM_TOLERANCE_MM, sql/schema.sql)과 같은 값으로 맞출 것
-DIM_LIMITS_3D = {"width": (6.0, 6.0), "depth": (6.0, 6.0), "height": (6.0, 6.0)}   # 모든 축 ±6.0 (정상 한계 = 불량 한계)
+DIM_LIMITS_3D = {"width": (10.0, 10.0), "depth": (6.0, 6.0), "height": (6.0, 6.0)}   # 가로 ±10.0, 길이·높이 ±6.0 (정상 한계 = 불량 한계)
 # 3D 스크립트를 돌릴 파이썬. 비워 두면 이 프로그램과 같은 환경 (open3d 가 이 환경에서 열려야 함)
 # PYTHON_3D = r"C:\...\station_3d\.venv\Scripts\python.exe"
 # 3D 코드 폴더. 최신 v2.6 (놓임 검사·인터락, rig_calibration.npz 포함)을 쓴다.

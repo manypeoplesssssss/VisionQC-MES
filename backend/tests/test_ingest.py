@@ -23,7 +23,7 @@ def test_full_flow_normal(mes):
 
 
 def test_dimension_rules(mes):
-    """축별 한계 (모든 축 ±6.0, 재검 구간 없음): 한계 이내 합격(경계 포함), 초과 불합격, 누락 대기.
+    """축별 한계 (가로 ±10.0, 길이·높이 ±6.0, 재검 구간 없음): 한계 이내 합격(경계 포함), 초과 불합격, 누락 대기.
     기준값은 보낸 값이 우선"""
     mes.start("D1")
     r = mes.dimension("D1", 101.5, 52.1, 31.6, standard_width_mm=100, standard_length_mm=50.1,
@@ -31,11 +31,11 @@ def test_dimension_rules(mes):
     d = r["dimension"]
     assert (d["width_result"], d["length_result"], d["height_result"]) == ("PASS", "PASS", "PASS")
     mes.start("R1")
-    r = mes.dimension("R1", 194.5 + 6.0, 84.96, 58.68)  # 가로 편차 6.0 = 한계 경계 → 합격
+    r = mes.dimension("R1", 194.5 + 10.0, 84.96, 58.68)  # 가로 편차 10.0 = 한계 경계 → 합격
     assert r["dimension"]["width_result"] == "PASS" and r["dimension_result"] == "PASS"
     assert r["final_result"] == "PATCHCORE_PENDING"
     mes.start("D2")
-    r = mes.dimension("D2", 194.5 + 6.1, 84.96, None)
+    r = mes.dimension("D2", 194.5 + 10.1, 84.96, None)
     assert r["dimension"]["width_result"] == "FAIL" and r["dimension"]["height_result"] == "PENDING"
     assert r["dimension_result"] == "FAIL" and r["final_result"] == "DIMENSION_DEFECT"
     # 길이: 편차 +6.0 / -6.0 = 한계 경계 → 합격, ±6.1 → 불합격
