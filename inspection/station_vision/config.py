@@ -23,8 +23,10 @@ BACKLASH_TAKEUP_DEG = 8.0
 # ---- 3D 검사 (inspection_app.py 의 [3D 검사] 버튼)
 # 3D 스크립트를 돌릴 파이썬. 비워 두면 이 프로그램과 같은 환경 (open3d 가 이 환경에서 열려야 함)
 # PYTHON_3D = r"C:\...\station_3d\.venv\Scripts\python.exe"
-# 3D 코드 폴더 (기본 inspection/station_3d)
-# STATION_3D_DIR = r"C:\...\inspection\station_3d\scanner_v2_6"
+# 3D 코드 폴더. 최신 v2.6 (놓임 검사·인터락, rig_calibration.npz 포함)을 쓴다.
+# 맨 위 station_3d 에는 rig_calibration.npz 가 없어서 스캔이 안 된다
+import os as _os
+STATION_3D_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "station_3d", "scanner_v2_6")
 
 # ---- YOLO 검사 카메라 번호 (OpenCV/DirectShow). 카메라를 더 꽂으면 번호가 밀리므로 camera_check.py 로 확인
 CAMERA_INDEX = 5
