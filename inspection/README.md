@@ -50,8 +50,8 @@ cd inspection\station_vision
 .venv\Scripts\python.exe inspection_app.py --no-gate  # 3D 없이 YOLO 만 시험
 ```
 화면 순서: **[① 3D 검사]** → 치수 합격이면 **[② 검사 시작]** 이 켜집니다 (불합격·재검이면 켜지지 않음).
-[②] 는 **PatchCore** (기본 5도씩 72장, 가장 높은 이상 점수로 판정) 를 먼저 하고, 합격이면 거기서 끝(정상), 불합격이면 이어서 **YOLO** 한 바퀴를 합니다. `PatchCore 먼저` 체크를 끄면 YOLO 만 합니다.
-PatchCore 사진은 검사 폴더의 `patchcore/` 에 `_pcNN.jpg`(원본), `_pcNN_roi.png`(모델 입력), `_pcNN_heatmap.jpg`, `_pcNN.json`(각도·점수·기준·shape) 으로 남습니다.
+[②] 는 **PatchCore** (기본 30도씩 12장, 가장 높은 이상 점수로 판정) 를 먼저 하고, 합격이면 거기서 끝(정상), 불합격이면 이어서 **YOLO** 한 바퀴를 합니다. `PatchCore 먼저` 체크를 끄면 YOLO 만 합니다.
+PatchCore 사진은 검사 폴더의 `patchcore/` 에 `_pcNN.jpg`(원본), `_pcNN_roi.png`(모델 입력), `_pcNN_heatmap.jpg`(위쪽에 점수·기준·합불 표시), `_pcNN.json`(각도·점수·기준·shape) 으로 남습니다.
 검사 영역은 학습 때 쓴 **고정 ROI**(`config.py` 의 `ROI_X`·`ROI_Y`, 600×320 픽셀)이고 카메라는 1920×1080 이어야 합니다 (`station_vision/PREPROCESSING.md`).
 `--sim` 은 1920×1080 원본 사진이 `captures/` 안에 있어야 합니다 (작은 사진을 확대하지 않음).
 DB 주소·사진 폴더·제품 모델명은 화면 오른쪽에서 바꾸거나 `station_vision/config.py` 에 `DB_URL`, `STORAGE_DIR`, `PRODUCT` 를 적습니다.

@@ -5,7 +5,7 @@ inspection_app.py — 3D 치수 검사 + YOLO 결함 검사를 한 화면에서 
     1. [① 3D 검사]  스캔 → 병합 → 측정 → DB 저장. 3D 코드(station_3d)는 같은 가상환경의 파이썬으로
                   그대로 실행만 한다 (코드를 고치지 않음). 치수 판정은 DB 가 한다
     2. 치수 합격 → [② 검사 시작] 버튼이 켜진다. 불합격·재검이면 켜지지 않는다 (다시 스캔)
-    3. [② 검사 시작] PatchCore: 설정한 각도(기본 5도)씩 멈추고 찍어서 이상 점수 계산 → 가장 높은 점수로 판정
+    3. [② 검사 시작] PatchCore: 설정한 각도(기본 30도)씩 멈추고 찍어서 이상 점수 계산 → 가장 높은 점수로 판정
        (각 사진의 원본·ROI·히트맵·점수 json 은 검사 폴더/patchcore 에 저장)
     4. PatchCore 합격 → 검사 끝 (최종 정상). 불합격 → 이어서 YOLO 한 바퀴로 결함 종류·위치 촬영
     [PatchCore 먼저] 를 끄면 YOLO 만 한다 (명시적인 YOLO 단독 모드).
@@ -70,7 +70,7 @@ GO_FILE = ROOT / "captures" / "3d_go.flag"  # 화면 버튼 → 3D 스캔 대기
 RUN_3D = ROOT.parent / "bridge_3d" / "run_3d_script.py"  # 3D 스크립트 실행기 (3D 코드 수정 없이 포트만 덮어씀)
 PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스크립트를 돌릴 파이썬 (기본: 이 프로그램과 같은 환경)
 # PatchCore (1단계): 턴테이블을 360/VIEWS 도씩 멈추며 찍고, 가장 높은 이상 점수로 합격/불합격
-PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 72))          # 72 → 5도씩 72장
+PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 12))          # 12 → 30도씩 12장
 PATCHCORE_MODEL = getattr(config, "PATCHCORE_MODEL", None)            # 없으면 visionPatchCore 의 models/v3
 # 연속 회전(S/X)이 없는 펌웨어(3D 용 v2.6)일 때 YOLO 를 몇 도씩 멈춰 가며 검사할지
 YOLO_STEP_DEG = float(getattr(config, "YOLO_STEP_DEG", 5.0))
@@ -596,6 +596,28 @@ class Engine(threading.Thread):
             self.patchcore = None
             self._log(f"PatchCore 모델을 불러오지 못했습니다 → PatchCore 검사 보류: {exc}")
 
+    @staticmethod
+    def _annotate_score(picture, view, angle, result):
+        """히트맵 사진 위에 띠를 붙여 이 사진의 점수와 판정 기준, 합격/불합격을 적고 기준선 막대를 그린다.
+        (OpenCV 글꼴은 한글을 못 그려서 영문 표기)"""
+        h, w = picture.shape[:2]
+        out = np.full((54 + h, w, 3), 255, np.uint8)  # 사진 위에 흰 띠를 붙여서 사진 내용을 가리지 않는다
+        out[54:] = picture
+        score, threshold = result["score"], result["threshold"]
+        bad = result["anomalous"]
+        color = (0, 0, 255) if bad else (0, 160, 0)  # BGR: 불합격 빨강 / 합격 초록
+        cv2.rectangle(out, (0, 0), (w, 54), (255, 255, 255), -1)
+        cv2.putText(out, f"view {view}  angle {angle:.0f}deg", (8, 20), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (30, 30, 30), 1, cv2.LINE_AA)
+        cv2.putText(out, f"score {score:.3f}  threshold {threshold:.3f}  {'FAIL' if bad else 'PASS'}", (8, 44),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2, cv2.LINE_AA)
+        # 점수 막대 (0~1) 와 기준선
+        x0, x1, y = int(w * 0.62), w - 10, 30
+        cv2.rectangle(out, (x0, y - 8), (x1, y + 8), (200, 200, 200), -1)
+        cv2.rectangle(out, (x0, y - 8), (x0 + int((x1 - x0) * min(max(score, 0.0), 1.0)), y + 8), color, -1)
+        tx = x0 + int((x1 - x0) * min(max(threshold, 0.0), 1.0))
+        cv2.line(out, (tx, y - 14), (tx, y + 14), (0, 0, 0), 2)
+        return out
+
     def _patchcore_crop(self, frame):
         return live.crop_roi(frame)
 
@@ -633,6 +655,7 @@ class Engine(threading.Thread):
             frame, _ = camera.fresh(after=time.monotonic() + 0.2)  # 멈춘 뒤의 새 프레임
             roi = self._patchcore_crop(frame)
             result = pc.inspect(roi)
+            result["heatmap"] = self._annotate_score(result["heatmap"], i + 1, angle, result)  # 점수·기준을 사진에 적는다
             if i == 0:
                 self._log(f"PatchCore frame shape={frame.shape}; ROI shape={roi.shape}; "
                           f"tensor={pc.last_input_shape}; feature input={pc.last_feature_input_shape}")
@@ -801,7 +824,7 @@ class Engine(threading.Thread):
                 self._state(status="PatchCore 검사 중", angle=0.0, captures=0, verdict="-", pc_score="-",
                             folder=folder.name, yolo_ready=False)
 
-                # ---- 1단계 PatchCore: 설정한 각도(기본 5도)씩 멈춰 찍고 최고 점수로 판정. 합격이면 YOLO 없이 끝
+                # ---- 1단계 PatchCore: 설정한 각도(기본 30도)씩 멈춰 찍고 최고 점수로 판정. 합격이면 YOLO 없이 끝
                 if self.patchcore is not None and self.patchcore_on():
                     pc = self.patchcore
                     self._log(f"PatchCore 검사 시작: {folder.name} ({PATCHCORE_VIEWS}장, {360 / PATCHCORE_VIEWS:g}도씩)")
