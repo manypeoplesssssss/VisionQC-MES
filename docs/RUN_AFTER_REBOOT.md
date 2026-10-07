@@ -67,7 +67,7 @@ cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_visio
 cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_vision
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-`open3d` 가 `애플리케이션 제어 정책에서 이 파일을 차단했습니다` 로 안 열리면 Windows **스마트 앱 컨트롤**이 막는 것입니다 (설정 → Windows 보안 → 앱 및 브라우저 컨트롤 → 스마트 앱 컨트롤 설정). 3D 팀이 쓰는 환경이 따로 있으면 `station_vision\config.py` 에 `PYTHON_3D = r"그 환경\Scripts\python.exe"` 를 적어 3D 스크립트만 그 파이썬으로 돌릴 수 있습니다.
+`open3d` 가 `애플리케이션 제어 정책에서 이 파일을 차단했습니다` 로 안 열리면 Windows **스마트 앱 컨트롤**이 막는 것입니다. 이 PC 에서는 `open3d 0.20.0` 이 막혀서 **0.19.0 으로 고정**해 해결했습니다 (`pip install open3d==0.19.0`, requirements.txt 에 반영). 그래도 막히면 스마트 앱 컨트롤을 끄거나, 3D 가 되는 환경의 파이썬을 `station_vision\config.py` 의 `PYTHON_3D` 에 적어 3D 스크립트만 그 파이썬으로 돌릴 수 있습니다.
 
 ## 결과 보기
 

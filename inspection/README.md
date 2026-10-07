@@ -40,7 +40,7 @@ cd inspection\station_vision
 python -m venv .venv
 .venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
-이 가상환경 하나에 YOLO 와 3D(`pyrealsense2`, `open3d`) 패키지가 모두 들어 있습니다. Windows **스마트 앱 컨트롤**이 켜져 있으면 `open3d` 가 "애플리케이션 제어 정책" 오류로 막힙니다 (해결은 [RUN_AFTER_REBOOT.md](../docs/RUN_AFTER_REBOOT.md) 3장). 3D 환경을 따로 두려면 `station_vision/config.py` 의 `PYTHON_3D` 에 그 파이썬을 적습니다.
+이 가상환경 하나에 YOLO 와 3D(`pyrealsense2`, `open3d`) 패키지가 모두 들어 있습니다. Windows **스마트 앱 컨트롤**이 켜져 있으면 `open3d 0.20.0` 이 "애플리케이션 제어 정책" 오류로 막혀서 `0.19.0` 으로 고정했습니다 (해결은 [RUN_AFTER_REBOOT.md](../docs/RUN_AFTER_REBOOT.md) 3장). 3D 환경을 따로 두려면 `station_vision/config.py` 의 `PYTHON_3D` 에 그 파이썬을 적습니다.
 
 ## 실행
 ```powershell

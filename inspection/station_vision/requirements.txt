@@ -14,5 +14,5 @@ cryptography          # MySQL 8 인증 방식(caching_sha2_password)
 # PatchCore 패키지(anomalib 등)는 PatchCore 코드를 붙일 때 추가
 # 3D 검사 (station_3d 스크립트가 쓰는 패키지, Python 3.11 / 3.12)
 pyrealsense2>=2.55    # Intel RealSense D435 카메라
-open3d>=0.19          # 포인트클라우드 병합·측정 (Windows 스마트 앱 컨트롤이 켜져 있으면 막힘)
+open3d==0.19.0       # 포인트클라우드 병합·측정. 0.20.0 은 Windows 스마트 앱 컨트롤이 켜져 있으면 DLL 이 막혀서 0.19.0 으로 고정
 scipy
