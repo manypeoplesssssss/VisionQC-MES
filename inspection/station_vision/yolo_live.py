@@ -218,8 +218,8 @@ class LatestCamera:
     별도 스레드가 카메라를 계속 읽어 가장 최신 프레임 1장만 들고 있는다.
     (카메라 버퍼에 쌓인 옛 프레임으로 검사하는 것을 막기 위함)"""
     def __init__(self):
-        # 1번 카메라 (OBS Virtual Camera / DroidCam 등). DirectShow 로 연다
-        self.cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+        # config.CAMERA_INDEX 번 카메라, 기본 1번 (OBS Virtual Camera / DroidCam 등). DirectShow 로 연다
+        self.cap = cv2.VideoCapture(getattr(config, "CAMERA_INDEX", 1), cv2.CAP_DSHOW)
         if not self.cap.isOpened():
             self.cap.release()
             raise RuntimeError("카메라 연결 실패")

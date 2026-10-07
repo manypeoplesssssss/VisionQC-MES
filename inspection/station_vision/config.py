@@ -25,3 +25,6 @@ BACKLASH_TAKEUP_DEG = 8.0
 # PYTHON_3D = r"C:\...\station_3d\.venv\Scripts\python.exe"
 # 3D 코드 폴더 (기본 inspection/station_3d)
 # STATION_3D_DIR = r"C:\...\inspection\station_3d\scanner_v2_6"
+
+# ---- YOLO 검사 카메라 번호 (OpenCV/DirectShow). 카메라를 더 꽂으면 번호가 밀리므로 camera_check.py 로 확인
+CAMERA_INDEX = 1
