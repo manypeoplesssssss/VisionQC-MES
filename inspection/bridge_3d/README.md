@@ -24,7 +24,7 @@ handoff 의 검사번호를 이어받아 같은 DB 검사 행에 YOLO 결과가 
 - 치수: 가로 / 길이(= 3D 코드의 depth, 전폭) / 높이 실측 + 3D `config.py` 의 `NOMINAL_MM` (검사 당시 기준으로 MES 에 저장)
 - 판정: DB 생성 컬럼이 축별 한계로 자동 계산 — 3D `config.py` 의 `RECHECK_MM`(정상 한계) / `TOLERANCE_MM`(불량 한계)와 같은 값
   - 3D 쪽 한계를 바꾸면 MES 쪽(`backend/app/models.py`, `backend/sql/schema.sql`)도 같이 바꿔야 합니다
-  - 길이(3D 코드의 depth)는 2026-10-07 에 정상 ±3.5 / 불량 ±5.5 로 바꿨습니다. 3D 코드 `config.py` 는 그대로 두고, 검사 프로그램이 `station_vision/config.py` 의 `DIM_LIMITS_3D` 로 실행할 때만 덮어씁니다
+  - 2026-10-07 에 모든 축(width·depth·height)을 정상 ±6.0 / 불량 ±6.0 (재검 구간 없음)으로 바꿨습니다. 3D 코드 `config.py` 는 그대로 두고, 검사 프로그램이 `station_vision/config.py` 의 `DIM_LIMITS_3D` 로 실행할 때만 덮어씁니다
 - DB 주소·제품 모델명: `--db --product`, 또는 환경변수 `VISIONQC_DB_URL`, 없으면 `backend/.env` 의 `DATABASE_URL` (같은 PC)
 - DB 에 연결이 안 되면 `bridge_3d/db_queue/` 에 쌓였다가 다음 저장 때 다시 저장합니다
 

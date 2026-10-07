@@ -16,31 +16,31 @@ def test_full_flow_normal(mes):
     r = mes.dimension("I1", 195.5, 84.0, 59.5)
     assert r["dimension_result"] == "PASS"
     assert r["dimension"]["standard_width_mm"] == 194.5  # 서버 설정(PRODUCT_STANDARDS)의 기준
-    assert r["dimension_data"]["tolerance_mm"]["length"] == 5.5
+    assert r["dimension_data"]["tolerance_mm"]["length"] == 6.0
     assert r["final_result"] == "PATCHCORE_PENDING"
     r = mes.patchcore("I1", 0.3)
     assert r["patchcore_result"] == "PASS" and r["final_result"] == "NORMAL"
 
 
 def test_dimension_rules(mes):
-    """축별 한계 (가로 1.5/2.5, 길이 3.5/5.5, 높이 1.5/2.0): 재검 한계 이내 합격(경계 포함),
-    재검 한계~불량 한계 재검, 불량 한계 초과 불합격, 누락 대기. 기준값은 보낸 값이 우선"""
+    """축별 한계 (모든 축 ±6.0, 재검 구간 없음): 한계 이내 합격(경계 포함), 초과 불합격, 누락 대기.
+    기준값은 보낸 값이 우선"""
     mes.start("D1")
     r = mes.dimension("D1", 101.5, 52.1, 31.6, standard_width_mm=100, standard_length_mm=50.1,
                       standard_height_mm=30.1)
     d = r["dimension"]
     assert (d["width_result"], d["length_result"], d["height_result"]) == ("PASS", "PASS", "PASS")
     mes.start("R1")
-    r = mes.dimension("R1", 197.0, 84.96, 58.68)  # 가로 편차 2.5 = 불량 한계 경계 → 재검
-    assert r["dimension"]["width_result"] == "RECHECK"
-    assert r["dimension_result"] == "RECHECK" and r["final_result"] == "DIMENSION_PENDING"
+    r = mes.dimension("R1", 194.5 + 6.0, 84.96, 58.68)  # 가로 편차 6.0 = 한계 경계 → 합격
+    assert r["dimension"]["width_result"] == "PASS" and r["dimension_result"] == "PASS"
+    assert r["final_result"] == "PATCHCORE_PENDING"
     mes.start("D2")
-    r = mes.dimension("D2", 197.1, 84.96, None)
+    r = mes.dimension("D2", 194.5 + 6.1, 84.96, None)
     assert r["dimension"]["width_result"] == "FAIL" and r["dimension"]["height_result"] == "PENDING"
     assert r["dimension_result"] == "FAIL" and r["final_result"] == "DIMENSION_DEFECT"
-    # 길이: 편차 3.5 = 정상 한계 경계 → 합격, 3.6 → 재검, -5.5 → 재검(불량 한계 경계), 5.6 → 불합격
-    for iid, length, expected in (("L1", 84.96 + 3.5, "PASS"), ("L2", 84.96 + 3.6, "RECHECK"),
-                                  ("L3", 84.96 - 5.5, "RECHECK"), ("L4", 84.96 + 5.6, "FAIL")):
+    # 길이: 편차 +6.0 / -6.0 = 한계 경계 → 합격, ±6.1 → 불합격
+    for iid, length, expected in (("L1", 84.96 + 6.0, "PASS"), ("L2", 84.96 - 6.0, "PASS"),
+                                  ("L3", 84.96 + 6.1, "FAIL"), ("L4", 84.96 - 6.1, "FAIL")):
         mes.start(iid)
         assert mes.dimension(iid, 194.5, length, 58.68)["dimension"]["length_result"] == expected, (iid, expected)
     mes.start("D3")

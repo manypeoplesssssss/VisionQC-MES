@@ -40,8 +40,8 @@ from .database import Base
 #   |편차| > 불량 한계(TOLERANCE)    → FAIL    불합격
 # 한계값은 정상 차 5회 스캔 표준편차의 2배(재검)·3배(불량). length = 3D 코드의 depth(전폭)
 # 아래 SQL 식(생성 컬럼)에 숫자로 들어가므로, 바꾸면 sql/schema.sql 도 같이 바꾸고 기존 DB 는 컬럼 식을 다시 정의해야 한다
-DIM_TOLERANCE_MM = {"width": 2.5, "length": 5.5, "height": 2.0}   # 불량 한계
-DIM_RECHECK_MM = {"width": 1.5, "length": 3.5, "height": 1.5}     # 정상 한계 (길이는 2026-10-07 에 2.0 / 3.5 → 3.5 / 5.5 로 변경)
+DIM_TOLERANCE_MM = {"width": 6.0, "length": 6.0, "height": 6.0}   # 불량 한계 (2026-10-07 에 모든 축 ±6.0 으로 통일)
+DIM_RECHECK_MM = {"width": 6.0, "length": 6.0, "height": 6.0}     # 정상 한계 (불량 한계와 같아서 재검 구간은 없다. 구간을 다시 두려면 이 값을 줄일 것)
 AXES = ("width", "length", "height")
 # 소수점 계산 오차로 경계값(예: 33.1 - 30.1 = 3.0000000000000036)이 한 단계 나쁘게 나오는 것 방지
 _EPS = 1e-6
