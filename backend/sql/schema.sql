@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS product_inspection (
 -- 판정 한계 (mm, inspection/station_3d/config.py 와 같은 값. 정상 차 5회 스캔 표준편차의 2배·3배)
 --          정상(재검) 한계   불량 한계
 --   가로        1.5            2.5
---   길이(전폭)   2.0            3.5
+--   길이(전폭)   3.5            5.5
 --   높이        1.5            2.0
 -- 축별: |편차| <= 정상 한계 PASS, ~ 불량 한계 RECHECK(재검, 다시 스캔), 초과 FAIL, 값 없음 PENDING (경계값은 좋은 쪽)
 -- 종합: 하나라도 FAIL → FAIL, (FAIL 없이) 하나라도 누락 → PENDING, 하나라도 RECHECK → RECHECK, 나머지 PASS
@@ -93,8 +93,8 @@ CREATE TABLE IF NOT EXISTS product_dimension_inspection (
              ELSE 'PASS' END) STORED NOT NULL,
     length_result      VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 길이 판정
         CASE WHEN length_mm IS NULL OR standard_length_mm IS NULL THEN 'PENDING'
-             WHEN ABS(length_mm - standard_length_mm) > 3.500001 THEN 'FAIL'
-             WHEN ABS(length_mm - standard_length_mm) > 2.000001 THEN 'RECHECK'
+             WHEN ABS(length_mm - standard_length_mm) > 5.500001 THEN 'FAIL'
+             WHEN ABS(length_mm - standard_length_mm) > 3.500001 THEN 'RECHECK'
              ELSE 'PASS' END) STORED NOT NULL,
     height_result      VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 높이 판정
         CASE WHEN height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING'
@@ -104,13 +104,13 @@ CREATE TABLE IF NOT EXISTS product_dimension_inspection (
     dimension_result   VARCHAR(16) GENERATED ALWAYS AS (                       -- [자동] 세 치수 종합 판정
         CASE
             WHEN (width_mm IS NOT NULL AND standard_width_mm IS NOT NULL AND ABS(width_mm - standard_width_mm) > 2.500001)
-              OR (length_mm IS NOT NULL AND standard_length_mm IS NOT NULL AND ABS(length_mm - standard_length_mm) > 3.500001)
+              OR (length_mm IS NOT NULL AND standard_length_mm IS NOT NULL AND ABS(length_mm - standard_length_mm) > 5.500001)
               OR (height_mm IS NOT NULL AND standard_height_mm IS NOT NULL AND ABS(height_mm - standard_height_mm) > 2.000001) THEN 'FAIL'
             WHEN width_mm IS NULL OR standard_width_mm IS NULL
               OR length_mm IS NULL OR standard_length_mm IS NULL
               OR height_mm IS NULL OR standard_height_mm IS NULL THEN 'PENDING'
             WHEN ABS(width_mm - standard_width_mm) > 1.500001
-              OR ABS(length_mm - standard_length_mm) > 2.000001
+              OR ABS(length_mm - standard_length_mm) > 3.500001
               OR ABS(height_mm - standard_height_mm) > 1.500001 THEN 'RECHECK'
             ELSE 'PASS'
         END) STORED NOT NULL,

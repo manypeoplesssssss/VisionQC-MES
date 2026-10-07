@@ -485,7 +485,8 @@ class Engine(threading.Thread):
             return camera, table, last_frame
         settings = self.mes_settings()
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "VISIONQC_DB_URL": settings["db_url"],
-               "VISIONQC_3D_SERIAL_PORT": config.SERIAL_PORT, "VISIONQC_3D_GO_FILE": str(GO_FILE)}  # 턴테이블은 3D·YOLO 가 같은 아두이노
+               "VISIONQC_3D_SERIAL_PORT": config.SERIAL_PORT, "VISIONQC_3D_GO_FILE": str(GO_FILE),
+               "VISIONQC_3D_LIMITS": json.dumps(getattr(config, "DIM_LIMITS_3D", {}))}  # 턴테이블은 3D·YOLO 가 같은 아두이노
         bridge = [PYTHON_3D, "-u", str(BRIDGE_3D), "--product", settings["product"],
                   "--centering", centering, "--interlock", interlock]
         if settings["serial"]:

@@ -247,7 +247,7 @@ storage/images/2026-10-06/2026-10-06-redcar-143005-YOLO-20261006_inspection_1430
 
 | 대상 | 규칙 |
 |---|---|
-| 치수 축별 | 실측·기준 중 하나라도 없으면 `PENDING`, `|편차|` ≤ 정상 한계 `PASS`, ≤ 불량 한계 `RECHECK`(재검, 다시 스캔), 초과 `FAIL` (경계값은 좋은 쪽). 한계: 가로 ±1.5 / ±2.5, 길이(전폭) ±2.0 / ±3.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계) = `models.py` 의 `DIM_RECHECK_MM` / `DIM_TOLERANCE_MM`, 3D 코드 `station_3d/config.py` 와 같은 값 |
+| 치수 축별 | 실측·기준 중 하나라도 없으면 `PENDING`, `|편차|` ≤ 정상 한계 `PASS`, ≤ 불량 한계 `RECHECK`(재검, 다시 스캔), 초과 `FAIL` (경계값은 좋은 쪽). 한계: 가로 ±1.5 / ±2.5, 길이(전폭) ±3.5 / ±5.5, 높이 ±1.5 / ±2.0mm (정상 한계 / 불량 한계) = `models.py` 의 `DIM_RECHECK_MM` / `DIM_TOLERANCE_MM`, 3D 코드 `station_3d/config.py` 와 같은 값 |
 | 치수 종합 | 하나라도 `FAIL` → `FAIL`, (FAIL 없이) 누락 → `PENDING`, 하나라도 `RECHECK` → `RECHECK`, 셋 다 `PASS` → `PASS`. `RECHECK` 는 최종 결과에서 `DIMENSION_PENDING` |
 | 기준 치수 | 검사 PC 가 보낸 값 > 서버 설정 `PRODUCT_STANDARDS[제품]` |
 | PatchCore | 검사 흐름에서 제외. `patchcore_*` 컬럼과 API 는 남아 있지만 최종 결과에 영향을 주지 않음 |

@@ -5,6 +5,7 @@ run_3d_script.py — station_3d 스크립트를 코드 수정 없이, 설정 일
 
 3D 코드(station_3d)는 건드리지 않는다. 대신 실행 직전에 그 폴더의 config 모듈 값을 환경변수로 덮어쓴다.
     VISIONQC_3D_SERIAL_PORT   턴테이블 아두이노 포트 (config.SERIAL_PORT 를 덮어씀. 예: COM3)
+    VISIONQC_3D_LIMITS        축별 판정 한계 덮어쓰기 JSON, 예: {"depth": [3.5, 5.5]} = [정상 한계, 불량 한계] (config.RECHECK_MM / TOLERANCE_MM)
     VISIONQC_3D_GO_FILE       스캔의 Space 대기를 이 파일이 생길 때도 넘김 (wait_patch.py, 검사 프로그램 버튼)
 검사 프로그램(inspection_app.py)이 station_vision/config.py 의 SERIAL_PORT 를 이 변수로 넘겨 준다.
 """
@@ -29,6 +30,15 @@ if script == "turntable_scan.py" and os.environ.get("VISIONQC_3D_GO_FILE"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import wait_patch  # noqa: E402
     wait_patch.install(d435_common, config)
+
+limits = os.environ.get("VISIONQC_3D_LIMITS")
+if limits:
+    import json
+    for axis, (ok_limit, ng_limit) in json.loads(limits).items():
+        if config.RECHECK_MM.get(axis) != ok_limit or config.TOLERANCE_MM.get(axis) != ng_limit:
+            print(f"(3D 판정 한계 {axis}: 정상 ±{config.RECHECK_MM.get(axis)} / 불량 ±{config.TOLERANCE_MM.get(axis)} → "
+                  f"±{ok_limit} / ±{ng_limit} 로 덮어씀, 3D 코드는 수정하지 않음)", flush=True)
+            config.RECHECK_MM[axis], config.TOLERANCE_MM[axis] = ok_limit, ng_limit
 
 sys.argv = [script, *args]
 runpy.run_path(os.path.join(folder, script), run_name="__main__")

@@ -16,14 +16,14 @@ def test_full_flow_normal(mes):
     r = mes.dimension("I1", 195.5, 84.0, 59.5)
     assert r["dimension_result"] == "PASS"
     assert r["dimension"]["standard_width_mm"] == 194.5  # 서버 설정(PRODUCT_STANDARDS)의 기준
-    assert r["dimension_data"]["tolerance_mm"]["length"] == 3.5
+    assert r["dimension_data"]["tolerance_mm"]["length"] == 5.5
     assert r["final_result"] == "YOLO_PENDING"
     r = mes.complete("I1")  # PatchCore 없이 YOLO 만, 결함 없이 한 바퀴 완료
     assert r["yolo_status"] == "COMPLETED" and r["final_result"] == "NORMAL"
 
 
 def test_dimension_rules(mes):
-    """축별 한계 (가로 1.5/2.5, 길이 2.0/3.5, 높이 1.5/2.0): 재검 한계 이내 합격(경계 포함),
+    """축별 한계 (가로 1.5/2.5, 길이 3.5/5.5, 높이 1.5/2.0): 재검 한계 이내 합격(경계 포함),
     재검 한계~불량 한계 재검, 불량 한계 초과 불합격, 누락 대기. 기준값은 보낸 값이 우선"""
     mes.start("D1")
     r = mes.dimension("D1", 101.5, 52.1, 31.6, standard_width_mm=100, standard_length_mm=50.1,
@@ -38,6 +38,11 @@ def test_dimension_rules(mes):
     r = mes.dimension("D2", 197.1, 84.96, None)
     assert r["dimension"]["width_result"] == "FAIL" and r["dimension"]["height_result"] == "PENDING"
     assert r["dimension_result"] == "FAIL" and r["final_result"] == "DIMENSION_DEFECT"
+    # 길이: 편차 3.5 = 정상 한계 경계 → 합격, 3.6 → 재검, -5.5 → 재검(불량 한계 경계), 5.6 → 불합격
+    for iid, length, expected in (("L1", 84.96 + 3.5, "PASS"), ("L2", 84.96 + 3.6, "RECHECK"),
+                                  ("L3", 84.96 - 5.5, "RECHECK"), ("L4", 84.96 + 5.6, "FAIL")):
+        mes.start(iid)
+        assert mes.dimension(iid, 194.5, length, 58.68)["dimension"]["length_result"] == expected, (iid, expected)
     mes.start("D3")
     r = mes.dimension("D3", 194.5, 84.96, None)
     assert r["dimension_result"] == "PENDING" and r["final_result"] == "DIMENSION_PENDING"
