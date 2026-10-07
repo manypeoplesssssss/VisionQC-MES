@@ -26,6 +26,10 @@ except ImportError:  # pragma: no cover
     serial = None
 
 
+# 3D 펌웨어(v2.6)가 0.5초마다 보내는 상태 줄. 명령 응답이 아니므로 건너뛴다
+STATUS_PREFIXES = ("STAT,", "EVT,", "HINT,", "BEAM,")
+
+
 class Turntable:
     """아두이노 턴테이블 1대. with 문으로 쓰면 끝날 때 포트를 자동으로 닫는다.
 
@@ -46,6 +50,8 @@ class Turntable:
         self.ser = serial.Serial(port, baud, timeout=0.1)
         self.cmd_timeout = timeout
         self.position_deg = 0.0      # 누적 명령 각도 (한 바퀴 넘어도 계속 증가)
+        # 연속 회전(S/X)을 지원하는가. 3D 펌웨어(v2.6)는 R/A/Z/P 만 있어서 stop() 때 False 로 바뀐다
+        self.continuous = True
         self._wait_ready()
 
     def _wait_ready(self, wait_s=4.0):
@@ -74,6 +80,16 @@ class Turntable:
             if buf.endswith(b"\n") or time.time() >= deadline:
                 return buf.decode(errors="ignore").strip()
 
+    def _reply(self, timeout=None):
+        """명령 응답 1줄. 3D 펌웨어의 상태 줄(STAT, 등)은 건너뛴다"""
+        deadline = time.time() + (self.cmd_timeout if timeout is None else timeout)
+        while True:
+            line = self._readline(timeout=max(0.1, deadline - time.time()))
+            if not line.startswith(STATUS_PREFIXES):
+                return line
+            if time.time() >= deadline:
+                return ""
+
     def _sync(self):
         """아두이노 쪽 수신 버퍼 정리 (보험).
         아두이노 버퍼에 잡음 바이트가 남아 있으면 다음 명령 앞에 붙어 ERR이 된다
@@ -90,7 +106,7 @@ class Turntable:
         expect_done=True 면 응답이 DONE 이 아닐 때 RuntimeError (회전·정지 명령용)"""
         self.ser.reset_input_buffer()  # 이전 명령의 남은 응답이 섞이지 않게 비운다
         self.ser.write((cmd + "\n").encode())
-        reply = self._readline()
+        reply = self._reply()
         if reply == "ERR" and _retry:
             # 명령 앞에 잡음이 붙어 인식 못한 경우 → 버퍼 정리 후 한 번만 재시도
             print(f"  [참고] {cmd!r}에 ERR 응답 → 시리얼 버퍼 정리 후 재시도")
@@ -103,13 +119,20 @@ class Turntable:
     # ---- 공개 API --------------------------------------------------------
     def start(self):
         """저속 연속 회전 시작/재개."""
+        if not self.continuous:
+            raise RuntimeError("이 보드의 펌웨어(3D 용)는 연속 회전(S)이 없습니다. R 로 각도씩 돌리세요")
         reply = self._command("S", expect_done=False)
         if reply != "STARTED":
             raise RuntimeError(f"연속 회전 시작 실패: {reply!r}")
 
     def stop(self):
         """즉시 스텝 정지 후 안정화 DONE까지 대기."""
-        self._command("X")
+        reply = self._command("X", expect_done=False)
+        if reply == "ERR":
+            # 3D 펌웨어: X 가 없다 (R 로 정한 각도만 이동하고 스스로 멈추므로 정지할 것이 없음)
+            self.continuous = False
+        elif reply != "DONE":
+            raise RuntimeError(f"턴테이블 응답 이상: 'X' -> {reply!r}")
         self.position_deg = self.reported_angle()
 
     def rotate(self, deg):

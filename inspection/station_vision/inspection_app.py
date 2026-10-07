@@ -72,6 +72,8 @@ PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스�
 # PatchCore (1단계): 턴테이블을 360/VIEWS 도씩 멈추며 찍고, 가장 높은 이상 점수로 합격/불합격
 PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 72))          # 72 → 5도씩 72장
 PATCHCORE_MODEL = getattr(config, "PATCHCORE_MODEL", None)            # 없으면 visionPatchCore 의 models/v3
+# 연속 회전(S/X)이 없는 펌웨어(3D 용 v2.6)일 때 YOLO 를 몇 도씩 멈춰 가며 검사할지
+YOLO_STEP_DEG = float(getattr(config, "YOLO_STEP_DEG", 5.0))
 # 이 상태일 때는 검사 시작 버튼을 잠근다 ("PatchCore 3/72" 같은 진행 표시도 포함)
 BUSY = ("3D 검사 중", "PatchCore 검사 중", "YOLO 검사 중")
 # 3D 검사(bridge_3d/save_3d_to_db.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
@@ -326,6 +328,9 @@ class Engine(threading.Thread):
         else:
             self.table = live.Turntable(port=config.SERIAL_PORT)
             self.table.stop()  # 이미 회전 중인 보드도 정지 상태로 맞춘다
+            if not self.table.continuous:
+                self._log("연결된 아두이노는 3D 펌웨어(연속 회전 없음)입니다 → PatchCore 는 그대로, YOLO 는 "
+                          f"{YOLO_STEP_DEG:g}도씩 멈춰 가며 검사합니다")
         return self.table
 
     def _open_camera(self):
@@ -702,6 +707,7 @@ class Engine(threading.Thread):
 
     def _loop(self, model, camera, table, last_frame):
         running = False
+        stepping = False
         last_capture_angle = None
         angle = 0.0
         captures = 0
@@ -830,7 +836,9 @@ class Engine(threading.Thread):
 
                 # ---- 2단계 YOLO: 연속 회전하며 결함 종류·위치 촬영
                 captures, last_capture_angle, angle = 0, None, 0.0
-                table.start()
+                stepping = not getattr(table, "continuous", True)  # 3D 펌웨어: 연속 회전이 없어 한 칸씩
+                if not stepping:
+                    table.start()
                 running = True
                 last_poll = 0.0
                 last_frame = time.monotonic()  # 시작 전 정지 영상으로 검출하지 않도록
@@ -839,6 +847,39 @@ class Engine(threading.Thread):
                 self._state(status="YOLO 검사 중", angle=0.0)
                 continue
             if not running:
+                continue
+
+            if stepping:
+                # ---- 단계 모드: 한 칸 돌고(안정화까지 기다림) → 멈춘 영상으로 검사 → 다음 칸
+                centering, interlock = self.safety()
+                if not safety_ok(centering, interlock):
+                    running = False
+                    self._log(f"안전 이상으로 정지·보류: 센터링 {CENTERING_KO.get(centering, centering)} / "
+                              f"인터락 {INTERLOCK_KO.get(interlock, interlock)} (자동 재시작 안 함)")
+                    self._state(status="보류(안전)", angle=table.position_deg)
+                    self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "검사 중 이상 감지")
+                    continue
+                angle = table.position_deg
+                self._state(angle=angle)
+                if found and live.capture_allowed(angle, last_capture_angle):
+                    stopped_frame, last_frame = camera.fresh(after=time.monotonic() + 0.2)
+                    stopped_result = live.inspect_roi(model, stopped_frame)
+                    confirmed = live.capture_defects(stopped_result)
+                    if confirmed:
+                        captures += 1
+                        live.save_capture(stopped_frame, stopped_result, angle, folder, captures)
+                        self._log(f"결함 촬영 {captures}: " + ", ".join(
+                            f"{d['class']} {d['confidence']:.2f}" for d in confirmed))
+                        self._state(captures=captures)
+                        self._submit_capture(folder, captures, confirmed, angle)
+                    last_capture_angle = angle
+                if angle >= 360.0 - 1e-6:
+                    table.finish_turn()
+                    running = False
+                    self._finish_job(captures)
+                    continue
+                table.rotate(min(YOLO_STEP_DEG, 360.0 - angle))
+                last_frame = time.monotonic()  # 돌린 뒤의 새 영상으로 검사
                 continue
 
             # ---- 회전 각도 확인 + 검사 중 장비 안전 확인 (0.5초마다)
