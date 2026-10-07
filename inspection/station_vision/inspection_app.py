@@ -2,7 +2,7 @@
 inspection_app.py — 버튼으로 조작하는 턴테이블 + PatchCore + YOLO 검사 프로그램
 
 검사 순서 ([검사 시작] 한 번에)
-    1. PatchCore: 45도씩 8번 멈추고 찍어서 각 사진의 이상 점수 계산 → 가장 높은 점수로 판정
+    1. PatchCore: 5도씩 72번 멈추고 찍어서 각 사진의 이상 점수 계산 → 가장 높은 점수로 판정
        각 사진의 원본·히트맵·점수(json)는 검사 폴더/patchcore 에 저장
     2. PatchCore 합격 → 검사 끝 (최종 정상). 불합격 → 이어서 YOLO 한 바퀴로 결함 종류·위치 촬영
     [PatchCore 먼저] 를 끄면 예전처럼 YOLO 만 한다.
@@ -53,7 +53,7 @@ STORAGE_DIR = str(getattr(config, "STORAGE_DIR", None) or DEFAULT_STORAGE_DIR)  
 PRODUCT = getattr(config, "PRODUCT", getattr(config, "MES_PRODUCT", "redcar"))     # 제품 모델명 (product_name)
 VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
 # PatchCore (1단계): 턴테이블을 360/VIEWS 도씩 멈추며 찍고, 가장 높은 이상 점수로 합격/불합격
-PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 8))          # 8 → 45도씩 8장
+PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 72))          # 8 → 5도씩 72장
 PATCHCORE_MODEL = getattr(config, "PATCHCORE_MODEL", None)            # 없으면 visionPatchCore 의 models/v3
 PATCHCORE_CROP = getattr(config, "PATCHCORE_CROP", "roi")             # "roi": 검사 영역 사각형만 / "full": 전체 화면
 # 3D 검사(bridge_3d/save_3d_to_db.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
@@ -443,7 +443,7 @@ class Engine(threading.Thread):
                 self._begin_job(folder, handoff)
                 self._state(status="검사 중", angle=0.0, captures=0, verdict="-", pc_score="-", folder=folder.name)
 
-                # ---- 1단계 PatchCore: 45도씩 멈춰 찍고 최고 점수로 판정. 합격이면 YOLO 없이 끝
+                # ---- 1단계 PatchCore: 설정한 각도(기본 5도)씩 멈춰 찍고 최고 점수로 판정. 합격이면 YOLO 없이 끝
                 if self.patchcore is not None and self.patchcore_on():
                     pc = self.patchcore
                     self._log(f"PatchCore 검사 시작: {folder.name} ({PATCHCORE_VIEWS}장, {360 / PATCHCORE_VIEWS:.0f}도씩)")

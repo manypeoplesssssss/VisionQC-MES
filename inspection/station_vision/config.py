@@ -21,7 +21,7 @@ ANGLE_STEP_DEG = 360.0 / N_VIEWS   # 테스트 1회 회전 각도 (360 / 72 = 5�
 BACKLASH_TAKEUP_DEG = 8.0
 
 # ---- PatchCore (1단계 검사, inspection_app.py)
-PATCHCORE_VIEWS = 8        # 한 바퀴에 멈춰서 찍는 장수 (8 → 45도씩)
+PATCHCORE_VIEWS = 72       # 한 바퀴에 멈춰서 찍는 장수 (72 → 5도씩. 8 → 45도씩)
 PATCHCORE_CROP = "roi"     # "roi": 검사 영역을 감싸는 사각형만 / "full": 카메라 전체 화면
 # PatchCore 모델 파일. 비워 두면 inspection/visionPatchCore/patchcore_export/models/v3/model.ckpt
 # PATCHCORE_MODEL = r"C:\...\models\v4\model.ckpt"

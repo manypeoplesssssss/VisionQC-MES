@@ -53,7 +53,7 @@ cd inspection\station_vision
 .venv\Scripts\python.exe inspection_app.py          # 실제 카메라 + 턴테이블
 .venv\Scripts\python.exe inspection_app.py --sim    # 장비 없이 captures 사진으로 시험
 ```
-[▶ 검사 시작] 한 번에 **PatchCore** (45도씩 8장, 가장 높은 이상 점수로 판정) → 불합격이면 **YOLO** 한 바퀴.
+[▶ 검사 시작] 한 번에 **PatchCore** (5도씩 72장, 가장 높은 이상 점수로 판정) → 불합격이면 **YOLO** 한 바퀴.
 PatchCore 합격이면 YOLO 없이 끝납니다 (최종 정상). `PatchCore 먼저` 체크를 끄면 YOLO 만 합니다.
 PatchCore 사진은 검사 폴더의 `patchcore/` 에 `_pcNN.jpg`(원본), `_pcNN_heatmap.jpg`, `_pcNN.json`(각도·점수·기준) 으로 남습니다.
 장수·자르는 범위·모델 파일은 `station_vision/config.py` 의 `PATCHCORE_VIEWS`, `PATCHCORE_CROP`, `PATCHCORE_MODEL`.

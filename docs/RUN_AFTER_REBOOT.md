@@ -66,7 +66,7 @@ cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_visio
 PatchCore 모델은 `inspection\visionPatchCore\patchcore_export\models\v3\model.ckpt` 를 읽습니다 (100MB 가 넘어 git 에는 없음, 따로 복사).
 
 [▶ 검사 시작] 한 번에:
-1. **PatchCore**: 턴테이블이 45도씩 8번 멈추며 찍고, 가장 높은 이상 점수로 판정 (오른쪽 `PC 점수` = 최고 점수 / 기준)
+1. **PatchCore**: 턴테이블이 5도씩 72번 멈추며 찍고, 가장 높은 이상 점수로 판정 (오른쪽 `PC 점수` = 최고 점수 / 기준)
 2. 합격이면 여기서 끝 (최종 정상). 불합격이면 이어서 **YOLO** 한 바퀴로 결함 종류·위치를 찍음
 
 `PatchCore 먼저` 체크를 끄면 예전처럼 YOLO 만 합니다. PatchCore 사진(원본·히트맵·점수)은 검사 폴더 안 `patchcore` 폴더에 남습니다.
