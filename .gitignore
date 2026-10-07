@@ -14,3 +14,8 @@ inspection/handoff/*
 inspection/station_3d/scans/
 db_queue/
 db_queue_failed/
+# PatchCore 학습 결과 모델 (100MB 넘음 → GitHub 에 못 올림, 따로 전달)
+*.ckpt
+inspection/visionPatchCore/patchcore_export/models/
+inspection/visionPatchCore/patchcore_export/data/
+inspection/visionPatchCore/patchcore_export/results/

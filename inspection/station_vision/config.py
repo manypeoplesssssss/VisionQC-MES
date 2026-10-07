@@ -19,3 +19,9 @@ ANGLE_STEP_DEG = 360.0 / N_VIEWS   # 테스트 1회 회전 각도 (360 / 72 = 5�
 # 촬영 전에 이 각도만큼 정방향으로 회전한 뒤 그 위치를 0도로 삼는다.
 # 실제 유격을 충분히 메울 수 있는 양수로 설정한다. 촬영 후 이 기준점으로 복귀한다.
 BACKLASH_TAKEUP_DEG = 8.0
+
+# ---- PatchCore (1단계 검사, inspection_app.py)
+PATCHCORE_VIEWS = 8        # 한 바퀴에 멈춰서 찍는 장수 (8 → 45도씩)
+PATCHCORE_CROP = "roi"     # "roi": 검사 영역을 감싸는 사각형만 / "full": 카메라 전체 화면
+# PatchCore 모델 파일. 비워 두면 inspection/visionPatchCore/patchcore_export/models/v3/model.ckpt
+# PATCHCORE_MODEL = r"C:\...\models\v4\model.ckpt"
