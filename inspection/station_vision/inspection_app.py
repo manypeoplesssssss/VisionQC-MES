@@ -28,6 +28,7 @@ DB 주소·사진 폴더는 화면에서 바꾸거나 config.py 에 DB_URL, STOR
 없으면 backend/.env 의 DATABASE_URL 과 backend/storage/images 를 쓴다 (MES 와 같은 PC 일 때).
 """
 import argparse
+import importlib.util
 import json
 import os
 import queue
@@ -153,6 +154,63 @@ class SimCamera:
         pass
 
 
+# ---------------------------------------------------------------- 3D 카메라(인텔 2대) 미리보기
+def serials_3d():
+    """3D 코드 설정(station_3d config.py)의 카메라 시리얼 2개. 읽기만 한다 (파일을 만들거나 고치지 않음)"""
+    keep = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        spec = importlib.util.spec_from_file_location("cfg3d_readonly", STATION_3D / "config.py")
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.dont_write_bytecode = keep
+    return mod.CAM_A_SERIAL, mod.CAM_B_SERIAL
+
+
+class RealSensePreview:
+    """3D 스캔 전에 인텔 카메라 2대의 컬러 영상을 나란히 보여 준다 (3D 스캔을 시작하기 전에 반드시 close)"""
+    TILE = (640, 360)
+
+    def __init__(self, serials):
+        import pyrealsense2 as rs
+        self.pipes, self.last = [], [None] * len(serials)
+        try:
+            for serial in serials:
+                pipe, cfg = rs.pipeline(), rs.config()
+                cfg.enable_device(serial)
+                cfg.enable_stream(rs.stream.color, 848, 480, rs.format.bgr8, 15)
+                pipe.start(cfg)
+                self.pipes.append(pipe)
+        except Exception:
+            self.close()
+            raise
+        self.serials = serials
+
+    def read(self):
+        tiles = []
+        for i, pipe in enumerate(self.pipes):
+            frames = pipe.poll_for_frames()
+            if frames:
+                color = frames.get_color_frame()
+                if color:
+                    self.last[i] = np.asanyarray(color.get_data()).copy()
+            tile = np.zeros((self.TILE[1], self.TILE[0], 3), np.uint8) if self.last[i] is None \
+                else cv2.resize(self.last[i], self.TILE)
+            cv2.putText(tile, f"3D camera {'AB'[i]}  {self.serials[i]}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.7, (0, 255, 255), 2)
+            tiles.append(tile)
+        return np.hstack(tiles)
+
+    def close(self):
+        for pipe in self.pipes:
+            try:
+                pipe.stop()
+            except Exception:
+                pass
+        self.pipes = []
+
+
 # ---------------------------------------------------------------- DB 저장 (별도 스레드)
 class Sender(threading.Thread):
     """검사 루프가 저장 때문에 멈추지 않도록 DB 저장은 이 스레드가 한다"""
@@ -204,6 +262,10 @@ class Engine(threading.Thread):
         self.gate_3d = gate_3d  # True: 3D 치수 합격 뒤에만 YOLO 시작
         self.sim_3d = sim_3d    # 시뮬레이션의 가짜 3D 측정 결과 (pass / recheck / fail)
         self.camera = self.table = None
+        self.ready = not gate_3d    # 치수 합격으로 YOLO 검사가 가능한 상태인가
+        self.force_yolo_view = False  # [YOLO 카메라 연결]을 눌렀으면 3D 검사 전에도 YOLO 카메라 영상을 보여 줌
+        self.preview = None         # 3D 카메라 미리보기 (인텔 2대)
+        self.preview_try = 0.0
         self.events = events
         self.sender = sender
         self.mes_settings = mes_settings  # 화면 입력값을 읽어 오는 함수
@@ -260,10 +322,32 @@ class Engine(threading.Thread):
         self._log("YOLO 카메라 연결 완료" + ("" if live.ROI_NORMALIZED else " - [검사 영역 설정]을 먼저 하세요"))
         return camera, last_frame
 
+    def _show_3d_view(self, running):
+        """3D 검사 전(치수 합격 전)에는 화면에 3D 카메라 2대 영상을 보여 준다. 시뮬레이션·--no-gate 는 해당 없음"""
+        return (not self.sim and self.gate_3d and not self.ready and not self.force_yolo_view and not running)
+
+    def _close_preview(self):
+        if self.preview is not None:
+            self.preview.close()
+            self.preview = None
+
+    def _update_3d_preview(self):
+        """인텔 카메라 2대 영상을 화면에 올린다. 못 열면 5초마다 다시 시도"""
+        if self.preview is None and time.monotonic() - self.preview_try >= 5:
+            self.preview_try = time.monotonic()
+            try:
+                self.preview = RealSensePreview(serials_3d())
+            except Exception as exc:
+                self._log(f"3D 카메라 미리보기를 열지 못했습니다: {exc}. USB 3 포트 연결을 확인하세요 (5초 뒤 다시 시도)")
+        picture = self.preview.read() if self.preview is not None else self._no_camera_picture("3D cameras not available")
+        with self.frame_lock:
+            self.view, self.raw = picture, None
+        time.sleep(0.03)
+
     @staticmethod
-    def _no_camera_picture():
+    def _no_camera_picture(title="YOLO camera not connected"):
         picture = np.full((360, 640, 3), 30, np.uint8)
-        cv2.putText(picture, "YOLO camera not connected", (90, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 200, 200), 2)
+        cv2.putText(picture, title, (90, 170), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (200, 200, 200), 2)
         cv2.putText(picture, "turn it on, then press Connect", (110, 215), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (150, 150, 150), 1)
         return picture
 
@@ -291,12 +375,17 @@ class Engine(threading.Thread):
             table = self._open_table()
             if self.sim:
                 self._log("시뮬레이션 모드: captures 사진을 카메라 대신, 가짜 3D 측정값을 사용합니다")
-            camera, last_frame = self._camera_ready(self._open_camera(), 0.0)
+            if self.sim or not self.gate_3d:
+                camera, last_frame = self._camera_ready(self._open_camera(), 0.0)
+            else:  # 3D 검사 먼저: 화면은 3D 카메라 2대. YOLO(아이폰) 카메라는 치수 합격 뒤에 연결
+                camera, last_frame = None, 0.0
+                self._log("먼저 [① 3D 검사]를 하세요. 화면에는 3D 카메라 2대 영상이 나옵니다")
             self._refresh_gate()
             self._loop(model, camera, table, last_frame)
         except Exception as exc:
             self.events.put(("error", str(exc)))
         finally:
+            self._close_preview()
             self._close_hw()
             self.stopped.set()
 
@@ -306,6 +395,7 @@ class Engine(threading.Thread):
         handoff = peek_handoff()
         result = handoff.get("dimension_result") if handoff else None
         ready = (not self.gate_3d) or bool(handoff and result == "PASS" and handoff.get("safety_ok") is not False)
+        self.ready = ready
         self._state(dimension=DIM_KO.get(result, "-") if handoff else "-", yolo_ready=ready)
         return handoff, ready
 
@@ -380,6 +470,8 @@ class Engine(threading.Thread):
                   "--centering", centering, "--interlock", interlock]
         if settings["serial"]:
             bridge += ["--serial", settings["serial"]]
+        self._close_preview()  # 3D 스캔이 같은 인텔 카메라를 쓰므로 먼저 놓아 준다
+        self.force_yolo_view = False
         self._state(status="3D 검사 중", dimension="-", yolo_ready=False, angle=0.0)
         self._log("3D 검사 시작" + ("" if self.sim else ": 카메라·턴테이블을 3D 스캔에 넘깁니다. 열리는 3D 창의 안내(Space 등)를 따르세요"))
         done = False
@@ -415,6 +507,8 @@ class Engine(threading.Thread):
         elif ready:
             self._log(f"3D 치수 합격 ({handoff['inspection_id']}) → [YOLO 검사]를 시작할 수 있습니다")
             self._state(status="3D 완료")
+            if camera is None:  # 이미 켜 둔 YOLO 카메라(아이폰 등)가 있으면 연결, 아니면 켠 뒤 [YOLO 카메라 연결]
+                camera, last_frame = self._camera_ready(self._open_camera(), last_frame)
         else:
             why = {"FAIL": "치수 불합격", "RECHECK": "치수 재검 (다시 스캔)"}.get((handoff or {}).get("dimension_result"), "판정 없음")
             if handoff and handoff.get("safety_ok") is False:
@@ -477,12 +571,17 @@ class Engine(threading.Thread):
         folder = None
         last_poll = 0.0
         while True:
-            if camera is None:
+            if self._show_3d_view(running):
+                self._update_3d_preview()
+                result, found = None, []
+            elif camera is None:
+                self._close_preview()
                 time.sleep(0.1)
                 result, found = None, []
                 with self.frame_lock:
                     self.view, self.raw = self._no_camera_picture(), None
             else:
+                self._close_preview()
                 frame, last_frame = camera.fresh(after=last_frame)
                 result = live.inspect_roi(model, frame) if live.ROI_NORMALIZED else None
                 found = live.capture_defects(result) if result is not None else []
@@ -509,6 +608,7 @@ class Engine(threading.Thread):
                     camera, table, last_frame = self._scan_3d(camera, table, last_frame)
                 continue
             if command == "camera":
+                self.force_yolo_view = True
                 if camera is None:
                     camera, last_frame = self._camera_ready(self._open_camera(), last_frame)
                 continue
