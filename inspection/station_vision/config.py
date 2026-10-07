@@ -20,8 +20,8 @@ ANGLE_STEP_DEG = 360.0 / N_VIEWS   # 테스트 1회 회전 각도 (360 / 72 = 5�
 # 실제 유격을 충분히 메울 수 있는 양수로 설정한다. 촬영 후 이 기준점으로 복귀한다.
 BACKLASH_TAKEUP_DEG = 8.0
 
-# ---- PatchCore (1단계 검사, inspection_app.py)
-PATCHCORE_VIEWS = 72       # 한 바퀴에 멈춰서 찍는 장수 (72 → 5도씩. 8 → 45도씩)
-PATCHCORE_CROP = "roi"     # "roi": 검사 영역을 감싸는 사각형만 / "full": 카메라 전체 화면
-# PatchCore 모델 파일. 비워 두면 inspection/visionPatchCore/patchcore_export/models/v3/model.ckpt
-# PATCHCORE_MODEL = r"C:\...\models\v4\model.ckpt"
+# ---- 3D 검사 (inspection_app.py 의 [3D 검사] 버튼)
+# 3D 스크립트를 돌릴 파이썬. 비워 두면 이 프로그램과 같은 환경 (open3d 가 이 환경에서 열려야 함)
+# PYTHON_3D = r"C:\...\station_3d\.venv\Scripts\python.exe"
+# 3D 코드 폴더 (기본 inspection/station_3d)
+# STATION_3D_DIR = r"C:\...\inspection\station_3d\scanner_v2_6"

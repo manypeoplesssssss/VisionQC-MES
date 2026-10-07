@@ -1,9 +1,7 @@
-# 비전 검사 PC (PatchCore → YOLO, 턴테이블) 가상환경에 설치할 패키지
+# 검사 PC (3D 검사 + YOLO, 턴테이블) 가상환경에 설치할 패키지
 # 설치: inspection\station_vision 폴더에서
 #   python -m venv .venv
-#   .venv\Scripts\python.exe -m pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
 #   .venv\Scripts\python.exe -m pip install -r requirements.txt
-# torch 를 먼저 CPU 용으로 깐다 (이 PC 는 AMD 그래픽이라 CUDA 를 못 씀. 안 하면 큰 CUDA 판이 깔림)
 ultralytics>=8.3      # YOLO 모델 (torch 를 같이 설치함)
 opencv-python>=4.8    # 카메라, 사진 처리
 numpy>=1.24
@@ -13,4 +11,8 @@ requests>=2.31        # (선택) MES API 로 보낼 때 ../common/mes_client.py
 sqlalchemy>=2.0       # DB 직접 저장 (../common/db_client.py)
 pymysql>=1.1          # MySQL 접속
 cryptography          # MySQL 8 인증 방식(caching_sha2_password)
-anomalib==2.6.2       # PatchCore (학습한 버전과 같게. patchcore_infer.py)
+# PatchCore 패키지(anomalib 등)는 PatchCore 코드를 붙일 때 추가
+# 3D 검사 (station_3d 스크립트가 쓰는 패키지, Python 3.11 / 3.12)
+pyrealsense2>=2.55    # Intel RealSense D435 카메라
+open3d>=0.19          # 포인트클라우드 병합·측정 (Windows 스마트 앱 컨트롤이 켜져 있으면 막힘)
+scipy

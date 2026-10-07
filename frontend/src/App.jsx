@@ -4,7 +4,7 @@
  *   /login                    로그인
  *   /                         대시보드
  *   /inspections              검사 조회 (검사 1회 = 한 줄)
- *   /inspections/:id          검사 상세 (치수 · PatchCore · YOLO 사진 · 불량 코드 지정)
+ *   /inspections/:id          검사 상세 (치수 · YOLO 사진 · 불량 코드 지정)
  *   /defect-types             불량 종류 D01~D05
  *   /alarms                   안전 알람 (센터링 · 인터락 발생/해제 이력)
  *   /account                  내 계정 (비밀번호 변경)

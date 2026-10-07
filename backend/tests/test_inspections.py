@@ -11,7 +11,7 @@ def test_list_filters_and_paging(client, mes, viewer):
     for i in range(4):
         mes.start(f"L{i}", serial=f"RC-{i}")
         mes.dimension(f"L{i}")
-        mes.patchcore(f"L{i}", 0.1)
+        mes.complete(f"L{i}")
     mes.start("L9")
     mes.dimension("L9", 50)  # 치수 불합격
     body = client.get("/api/inspections", headers=viewer, params={"date_from": TODAY, "size": 2}).json()
@@ -64,4 +64,4 @@ def test_export_csv(client, mes, viewer):
     assert r.status_code == 200
     text = r.content.decode("utf-8-sig")
     assert text.splitlines()[0].startswith("inspection_id,created_at,product_name")
-    assert "CSV1" in text and "PATCHCORE_PENDING" in text
+    assert "CSV1" in text and "YOLO_PENDING" in text

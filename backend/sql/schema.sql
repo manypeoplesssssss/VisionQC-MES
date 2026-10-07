@@ -45,10 +45,9 @@ CREATE TABLE IF NOT EXISTS product_inspection (
         CASE
             WHEN dimension_result IS NULL OR dimension_result IN ('PENDING', 'RECHECK') THEN 'DIMENSION_PENDING'   -- 재검은 다시 스캔할 때까지 대기
             WHEN dimension_result = 'FAIL' THEN 'DIMENSION_DEFECT'
-            WHEN patchcore_result IS NULL OR patchcore_result = 'PENDING' THEN 'PATCHCORE_PENDING'
-            WHEN patchcore_result = 'PASS' THEN 'NORMAL'
-            WHEN yolo_status = 'COMPLETED' THEN 'PROCESS_DEFECT'
-            ELSE 'YOLO_PENDING'
+            WHEN yolo_status <> 'COMPLETED' THEN 'YOLO_PENDING'                                                   -- PatchCore 는 검사 흐름에서 제외
+            WHEN JSON_LENGTH(yolo_defect_data) > 0 THEN 'PROCESS_DEFECT'                                          -- YOLO 완료 + 결함 있음
+            ELSE 'NORMAL'                                                                                         -- YOLO 완료 + 결함 없음
         END) STORED NOT NULL,
     recommended_action      TEXT         NULL,                                  -- 원인 후보 및 권장 조치 (지정된 불량 코드에서 모음)
     report_path             VARCHAR(500) NULL,                                  -- 생성한 리포트 파일 경로

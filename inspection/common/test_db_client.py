@@ -51,9 +51,7 @@ def test_full_flow_written_to_db_and_read_by_mes(db, mes_app, tmp_path):
     r = db.start(iid, "redcar", product_serial="RC-1", capture_folder="captures/x")
     assert r["final_result"] == "DIMENSION_PENDING" and r["centering_state"] == "UNKNOWN"
     r = db.send_dimension(iid, 195.0, 85.0, 58.7, standards=(194.5, 84.96, 58.68), centering="OFF", interlock="0")
-    assert r["dimension_result"] == "PASS" and r["final_result"] == "PATCHCORE_PENDING" and r["active_alarms"] == 0
-    r = db.send_patchcore(iid, 0.9, 0.6)
-    assert r["patchcore_result"] == "FAIL" and r["final_result"] == "YOLO_PENDING"
+    assert r["dimension_result"] == "PASS" and r["final_result"] == "YOLO_PENDING" and r["active_alarms"] == 0
     img = tmp_path / "c001.jpg"
     img.write_bytes(b"\xff\xd8 fake jpg")
     r = db.send_yolo_capture(iid, 1, img, img, defects=[{"defect_class": "scratch", "confidence": 0.91, "box": [1, 2, 3, 4]}],

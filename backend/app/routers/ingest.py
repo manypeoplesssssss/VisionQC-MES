@@ -10,7 +10,7 @@ PUT  /api/inspections/{inspection_id}/patchcore           PatchCore 점수·기�
 POST /api/inspections/{inspection_id}/yolo/captures       결함 사진 1장 (원본 + 표시 사진 + 결함 목록)
 PUT  /api/inspections/{inspection_id}/yolo/complete       YOLO 분류 완료
 
-final_result(최종 결과)는 DB 가 dimension_result → patchcore_result → yolo_status 순서로 자동 계산한다.
+final_result(최종 결과)는 DB 가 dimension_result → yolo_status(+결함 유무) 순서로 자동 계산한다 (PatchCore 는 제외).
 단계 API 는 검사 행이 없으면 만들어 주므로(product_name 쿼리 필요), 순서가 섞여 들어와도 된다.
 
 사진 파일명: 일자-제품-시각-공정-검사번호_c사진번호[_annotated].확장자

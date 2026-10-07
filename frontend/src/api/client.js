@@ -85,17 +85,16 @@ async function download(path, params, fallbackName) {
   URL.revokeObjectURL(a.href);
 }
 
-/** 단계 판정 표시 이름 (치수 · PatchCore) */
+/** 단계 판정 표시 이름 (치수) */
 export const STAGE_LABEL = { PASS: "합격", RECHECK: "재검", FAIL: "불합격", PENDING: "대기" };
 /** YOLO 진행 상태 */
 export const YOLO_LABEL = { NOT_STARTED: "시작 전", IN_PROGRESS: "진행 중", COMPLETED: "완료" };
-/** 최종 결과 6가지 (백엔드 FinalResult 와 같은 순서). tone: 배지 색 */
+/** 최종 결과 5가지 (백엔드 FinalResult 와 같은 순서, PatchCore 는 검사 흐름에서 제외). tone: 배지 색 */
 export const FINAL_RESULTS = [
   { code: "DIMENSION_PENDING", label: "치수 대기·재검", tone: "wip" },
   { code: "DIMENSION_DEFECT", label: "치수 불합격", tone: "ng" },
-  { code: "PATCHCORE_PENDING", label: "PatchCore 대기", tone: "wip" },
+  { code: "YOLO_PENDING", label: "YOLO 검사 대기", tone: "wip" },
   { code: "NORMAL", label: "정상", tone: "ok" },
-  { code: "YOLO_PENDING", label: "YOLO 분류 대기", tone: "ng" },
   { code: "PROCESS_DEFECT", label: "공정 불량", tone: "ng" },
 ];
 export const finalLabel = (code) => FINAL_RESULTS.find((f) => f.code === code)?.label ?? code;

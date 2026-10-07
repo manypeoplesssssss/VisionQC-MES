@@ -23,9 +23,8 @@ from ..storage import image_url
 MAX_RANGE_DAYS = 366
 
 # 최종 결과 묶음 (대시보드·불량률 계산)
-DEFECT_RESULTS = {FinalResult.DIMENSION_DEFECT.value, FinalResult.YOLO_PENDING.value,
-                  FinalResult.PROCESS_DEFECT.value}       # 불량 (치수 불합격 또는 PatchCore 불합격)
-PENDING_RESULTS = {FinalResult.DIMENSION_PENDING.value, FinalResult.PATCHCORE_PENDING.value}  # 판정 전
+DEFECT_RESULTS = {FinalResult.DIMENSION_DEFECT.value, FinalResult.PROCESS_DEFECT.value}  # 불량 (치수 불합격 또는 YOLO 결함)
+PENDING_RESULTS = {FinalResult.DIMENSION_PENDING.value, FinalResult.YOLO_PENDING.value}  # 판정 전 (치수 또는 YOLO 대기)
 
 
 def day_start(d: date) -> datetime:

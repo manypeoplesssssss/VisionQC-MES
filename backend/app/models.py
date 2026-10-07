@@ -29,7 +29,9 @@ from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import (JSON, Boolean, CheckConstraint, Computed, DateTime, Double, Enum, ForeignKey,
-                        Index, Integer, String, Text, func)
+                        Index, Integer, String, Text, case, func, literal_column)
+from sqlalchemy.ext.compiler import compiles
+from sqlalchemy.sql.expression import FunctionElement
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -69,10 +71,9 @@ class FinalResult(str, enum.Enum):
     """최종 검사 결과 (DB 자동 계산)"""
     DIMENSION_PENDING = "DIMENSION_PENDING"  # 치수 검사 대기
     DIMENSION_DEFECT = "DIMENSION_DEFECT"    # 치수 불합격
-    PATCHCORE_PENDING = "PATCHCORE_PENDING"  # 치수 합격 후 PatchCore 검사 대기
-    NORMAL = "NORMAL"                        # 치수와 PatchCore 모두 합격
-    YOLO_PENDING = "YOLO_PENDING"            # PatchCore 불합격 후 YOLO 분류 대기
-    PROCESS_DEFECT = "PROCESS_DEFECT"        # PatchCore 불합격 후 YOLO 분류 완료
+    YOLO_PENDING = "YOLO_PENDING"            # 치수 합격 후 YOLO 검사 대기·진행 중
+    NORMAL = "NORMAL"                        # 치수 합격 + YOLO 완료, 결함 없음
+    PROCESS_DEFECT = "PROCESS_DEFECT"        # 치수 합격 + YOLO 완료, 결함 있음
 
 
 class Role(str, enum.Enum):
@@ -161,15 +162,33 @@ _DIMENSION_RESULT_SQL = (
     "ELSE 'PASS' END"
 )
 
-# 최종 결과: 치수 → PatchCore → YOLO 순서로 내려가며 판단 (치수 재검은 다시 스캔할 때까지 '치수 검사 대기')
-_FINAL_RESULT_SQL = (
-    "CASE "
-    "WHEN dimension_result IS NULL OR dimension_result IN ('PENDING', 'RECHECK') THEN 'DIMENSION_PENDING' "
-    "WHEN dimension_result = 'FAIL' THEN 'DIMENSION_DEFECT' "
-    "WHEN patchcore_result IS NULL OR patchcore_result = 'PENDING' THEN 'PATCHCORE_PENDING' "
-    "WHEN patchcore_result = 'PASS' THEN 'NORMAL' "
-    "WHEN yolo_status = 'COMPLETED' THEN 'PROCESS_DEFECT' "
-    "ELSE 'YOLO_PENDING' END"
+# 최종 결과: 치수 → YOLO 순서로 내려가며 판단 (치수 재검은 다시 스캔할 때까지 '치수 검사 대기').
+# PatchCore 는 검사 흐름에서 뺐다: patchcore_* 컬럼은 남아 있지만 최종 결과에 영향을 주지 않는다.
+# YOLO 가 완료됐을 때 결함이 하나라도 있으면 공정 불량, 없으면 정상
+class _JsonLength(FunctionElement):
+    """JSON 배열 길이 (MySQL: JSON_LENGTH, SQLite: json_array_length)"""
+    type = Integer()
+    name = "json_length"
+    inherit_cache = True
+
+
+@compiles(_JsonLength)
+def _json_length_default(element, compiler, **kw):
+    return f"json_array_length({compiler.process(element.clauses, **kw)})"
+
+
+@compiles(_JsonLength, "mysql")
+def _json_length_mysql(element, compiler, **kw):
+    return f"JSON_LENGTH({compiler.process(element.clauses, **kw)})"
+
+
+_FINAL_RESULT_SQL = case(
+    (literal_column("dimension_result IS NULL OR dimension_result IN ('PENDING', 'RECHECK')"),
+     literal_column("'DIMENSION_PENDING'")),
+    (literal_column("dimension_result = 'FAIL'"), literal_column("'DIMENSION_DEFECT'")),
+    (literal_column("yolo_status <> 'COMPLETED'"), literal_column("'YOLO_PENDING'")),
+    (_JsonLength(literal_column("yolo_defect_data")) > 0, literal_column("'PROCESS_DEFECT'")),
+    else_=literal_column("'NORMAL'"),
 )
 
 

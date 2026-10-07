@@ -10,16 +10,16 @@ from tests.helpers import SCRATCH, WHITE_PAINT
 
 
 def test_full_flow_normal(mes):
-    """치수 합격 → PatchCore 합격 → 최종 NORMAL"""
+    """치수 합격 → YOLO 완료(결함 없음) → 최종 NORMAL"""
     r = mes.start("I1", serial="RC-0001", capture_folder="captures/x")
     assert r["final_result"] == "DIMENSION_PENDING" and r["yolo_status"] == "NOT_STARTED"
     r = mes.dimension("I1", 195.5, 84.0, 59.5)
     assert r["dimension_result"] == "PASS"
     assert r["dimension"]["standard_width_mm"] == 194.5  # 서버 설정(PRODUCT_STANDARDS)의 기준
     assert r["dimension_data"]["tolerance_mm"]["length"] == 3.5
-    assert r["final_result"] == "PATCHCORE_PENDING"
-    r = mes.patchcore("I1", 0.3)
-    assert r["patchcore_result"] == "PASS" and r["final_result"] == "NORMAL"
+    assert r["final_result"] == "YOLO_PENDING"
+    r = mes.complete("I1")  # PatchCore 없이 YOLO 만, 결함 없이 한 바퀴 완료
+    assert r["yolo_status"] == "COMPLETED" and r["final_result"] == "NORMAL"
 
 
 def test_dimension_rules(mes):
@@ -43,12 +43,11 @@ def test_dimension_rules(mes):
     assert r["dimension_result"] == "PENDING" and r["final_result"] == "DIMENSION_PENDING"
 
 
-def test_patchcore_fail_then_yolo(mes):
-    """PatchCore 불합격 → YOLO 대기 → 사진 등록 → 완료하면 PROCESS_DEFECT"""
+def test_yolo_defect(mes):
+    """치수 합격 → YOLO 대기 → 사진 등록 → 완료하면 PROCESS_DEFECT"""
     mes.start("Y1")
-    mes.dimension("Y1")
-    r = mes.patchcore("Y1", 0.6)  # 점수 >= 기준 → 불합격
-    assert r["patchcore_result"] == "FAIL" and r["final_result"] == "YOLO_PENDING"
+    r = mes.dimension("Y1")
+    assert r["final_result"] == "YOLO_PENDING"
     r = mes.capture("Y1", 1, [SCRATCH, WHITE_PAINT])
     assert r["yolo_status"] == "IN_PROGRESS" and r["defect_count"] == 2 and r["capture_count"] == 1
     img = r["images"][0]

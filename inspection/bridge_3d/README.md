@@ -15,9 +15,9 @@ cd inspection\station_3d
 `--centering` / `--interlock` 은 측정할 때의 장비 안전 상태입니다 (센서가 아직 없어서 작업자가 확인한 값).
 안 주면 미확인(UNKNOWN)으로 기록되어 DB 에 알람이 남고, 비전 검사가 이어받지 않습니다.
 검사 허용: **센터링 OFF(정위치) + 인터락 0(정상)**.
-그다음 환경을 바꿔 `station_vision` 의 `inspection_app.py` 에서 [검사 시작]을 누르면
-handoff 의 검사번호를 이어받아 같은 DB 검사 행에 PatchCore·YOLO 결과가 붙습니다.
-치수 불합격이면 비전 검사 프로그램이 검사를 시작하지 않습니다.
+`station_vision/inspection_app.py` 의 **[① 3D 검사]** 버튼이 위 순서를 대신 실행하고, 치수가 합격이면 [② YOLO 검사]가 켜져
+handoff 의 검사번호를 이어받아 같은 DB 검사 행에 YOLO 결과가 붙습니다. 치수 불합격·재검이면 YOLO 검사를 시작하지 않습니다.
+(이 순서를 손으로 직접 실행해도 됩니다.)
 
 ## DB 에 저장하는 것
 - 검사번호: 측정 시각 기준 `YYYYMMDD_inspection_HHMMSS_3d`

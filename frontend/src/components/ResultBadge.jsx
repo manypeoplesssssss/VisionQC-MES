@@ -14,7 +14,7 @@ export function FinalBadge({ value }) {
   return <span className={`badge ${f.tone}`}>{f.label}</span>;
 }
 
-/** 치수 · PatchCore 단계 판정 */
+/** 치수 단계 판정 */
 const STAGE_TONE = { PASS: "ok", RECHECK: "wip", FAIL: "ng", PENDING: "wip" };
 export function StageBadge({ value }) {
   if (!value) return <span className="badge none">-</span>;

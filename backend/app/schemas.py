@@ -283,7 +283,7 @@ class AlarmPage(BaseModel):
 # =========================================================================
 class StageCount(BaseModel):
     """단계 1개의 상태별 건수 (예: 치수 PASS 30 / FAIL 2 / PENDING 1)"""
-    stage: str          # DIMENSION / PATCHCORE / YOLO
+    stage: str          # DIMENSION / YOLO
     counts: dict[str, int]
 
 
@@ -305,8 +305,8 @@ class DashboardSummary(BaseModel):
     date: str
     total: int                       # 그날 검사 수
     normal: int                      # NORMAL
-    defect: int                      # 치수 불합격 + PatchCore 불합격(YOLO 대기/완료)
-    pending: int                     # 치수 대기 + PatchCore 대기
+    defect: int                      # 치수 불합격 + YOLO 결함
+    pending: int                     # 치수 대기 + YOLO 대기
     defect_rate: float               # 판정 끝난 검사 중 불량 비율(%)
     by_final: dict[str, int]         # 최종 결과 6가지별 건수
     by_stage: list[StageCount]

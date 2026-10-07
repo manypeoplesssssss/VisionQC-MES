@@ -110,7 +110,7 @@ def main():
         print(f"  장비 안전 이상(센터링 {args.centering} / 인터락 {args.interlock}): DB 에 알람을 남겼고, "
               "비전 검사로 이어받지 않습니다. 상태를 확인하고 다시 스캔하세요.")
     elif dimension_result == "FAIL":
-        print("  치수 불합격 제품입니다. 비전 검사(PatchCore·YOLO)로 넘기지 않아도 됩니다.")
+        print("  치수 불합격 제품입니다. YOLO 검사로 넘기지 않아도 됩니다.")
     elif dimension_result == "RECHECK":
         print("  재검입니다. 다시 스캔해서 측정하세요 (새 검사번호로 다시 저장하면 됩니다).")
 
