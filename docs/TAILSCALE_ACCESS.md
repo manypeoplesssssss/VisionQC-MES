@@ -44,6 +44,9 @@ DBeaver·Workbench 에 위 값을 입력하거나, 명령줄:
 mysql -h <서버 PC 의 Tailscale IP> -u mes_user -p visionqc
 ```
 
+**조회 전용 계정 `viewer_user` 는 2026-10-08 에 만들어 두었습니다** (SELECT 만 가능, `admin_user` 테이블은 읽을 수 없음, 비밀번호는 서버 PC 관리자에게 받으세요).
+새로 만들거나 다시 만들어야 할 때는 아래 방법을 씁니다.
+
 ### 조회 전용 계정 만들기 (서버 PC 관리자가 한 번만, MySQL root 필요)
 
 ```powershell
@@ -51,11 +54,14 @@ mysql -h <서버 PC 의 Tailscale IP> -u mes_user -p visionqc
 ```
 ```sql
 CREATE USER 'viewer_user'@'%' IDENTIFIED BY '새비밀번호';
-GRANT SELECT ON visionqc.* TO 'viewer_user'@'%';
+GRANT SELECT ON visionqc.product_inspection TO 'viewer_user'@'%';
+GRANT SELECT ON visionqc.product_dimension_inspection TO 'viewer_user'@'%';
+GRANT SELECT ON visionqc.defect_type TO 'viewer_user'@'%';
+GRANT SELECT ON visionqc.equipment_safety_alarm TO 'viewer_user'@'%';
 FLUSH PRIVILEGES;
 ```
 이후 작업자에게는 `viewer_user` 를 알려 주고 `mes_user` 는 서버 PC 와 검사 프로그램만 씁니다.
-(`admin_user` 테이블의 `password_hash` 도 보이므로, 민감하면 `GRANT SELECT` 를 필요한 테이블에만 주세요.)
+(`admin_user` 테이블에는 비밀번호 해시가 있어서 일부러 권한을 주지 않았습니다.)
 
 ## 4. 서버 PC 관리자가 지켜야 할 것
 
