@@ -7,6 +7,7 @@ run_3d_script.py — station_3d 스크립트를 코드 수정 없이, 설정 일
     VISIONQC_3D_SERIAL_PORT   턴테이블 아두이노 포트 (config.SERIAL_PORT 를 덮어씀. 예: COM3)
     VISIONQC_3D_LIMITS        축별 판정 한계 덮어쓰기 JSON, 예: {"depth": [3.5, 5.5]} = [정상 한계, 불량 한계] (config.RECHECK_MM / TOLERANCE_MM)
     VISIONQC_3D_GO_FILE       스캔의 Space 대기를 이 파일이 생길 때도 넘김 (wait_patch.py, 검사 프로그램 버튼)
+    VISIONQC_3D_RESET_FILE    인터락 대기 중 이 파일이 생기면 펌웨어에 리셋 요청 'U' 를 보냄 (interlock_patch.py, [인터락 리셋] 버튼)
 검사 프로그램(inspection_app.py)이 station_vision/config.py 의 SERIAL_PORT 를 이 변수로 넘겨 준다.
 """
 import os
@@ -30,6 +31,14 @@ if script == "turntable_scan.py" and os.environ.get("VISIONQC_3D_GO_FILE"):
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import wait_patch  # noqa: E402
     wait_patch.install(d435_common, config)
+
+if script == "turntable_scan.py":
+    # 인터락·놓임 불량 때 검사 프로그램 버튼으로 이어 가게 한다 (3D 코드는 수정하지 않음). interlock_patch.py 참고
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import interlock_patch  # noqa: E402
+    import turntable as turntable_3d  # noqa: E402  (3D 폴더의 turntable.py)
+    interlock_patch.install_reset(turntable_3d)
+    interlock_patch.install_input(os.environ.get("VISIONQC_3D_GO_FILE"))
 
 limits = os.environ.get("VISIONQC_3D_LIMITS")
 if limits:

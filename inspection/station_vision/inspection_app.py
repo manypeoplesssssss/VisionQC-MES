@@ -57,6 +57,7 @@ sys.path.insert(0, str(ROOT.parent / "common"))
 
 import config  # noqa: E402
 import yolo_live as live  # noqa: E402
+from turntable import PLACEMENT_MESSAGES, InterlockStop  # noqa: E402
 from db_client import DEFAULT_STORAGE_DIR, DBClient, DBError, default_db_url, safety_ok  # noqa: E402
 
 DB_URL = getattr(config, "DB_URL", None) or default_db_url()                    # MES 와 같은 DB
@@ -67,6 +68,7 @@ VIEW_MAX = (960, 720)  # 화면에 보여 줄 영상 최대 크기
 STATION_3D = Path(getattr(config, "STATION_3D_DIR", None) or ROOT.parent / "station_3d")
 BRIDGE_3D = ROOT.parent / "bridge_3d" / "save_3d_to_db.py"
 GO_FILE = ROOT / "captures" / "3d_go.flag"  # 화면 버튼 → 3D 스캔 대기 해제 신호 (wait_patch.py 가 이 파일을 본다)
+RESET_FILE = ROOT / "captures" / "3d_reset.flag"  # [인터락 리셋] 버튼 → 3D 스캔의 인터락 대기에 리셋 요청 (interlock_patch.py 가 본다)
 RUN_3D = ROOT.parent / "bridge_3d" / "run_3d_script.py"  # 3D 스크립트 실행기 (3D 코드 수정 없이 포트만 덮어씀)
 PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스크립트를 돌릴 파이썬 (기본: 이 프로그램과 같은 환경)
 # PatchCore (1단계): 턴테이블을 360/VIEWS 도씩 멈추며 찍고, 가장 높은 이상 점수로 합격/불합격
@@ -76,7 +78,8 @@ PATCHCORE_THRESHOLD = getattr(config, "PATCHCORE_THRESHOLD", None)    # 판정 �
 # 연속 회전(S/X)이 없는 펌웨어(3D 용 v2.6)일 때 YOLO 를 몇 도씩 멈춰 가며 검사할지
 YOLO_STEP_DEG = float(getattr(config, "YOLO_STEP_DEG", 5.0))
 # 이 상태일 때는 검사 시작 버튼을 잠근다 ("PatchCore 3/72" 같은 진행 표시도 포함)
-BUSY = ("3D 검사 중", "PatchCore 검사 중", "YOLO 검사 중")
+HOLD_STATUS = ("인터락 정지", "인터락 정지(3D)", "인터락 해제 · 이어서 진행 대기")  # 인터락으로 멈춰 작업자 조치를 기다리는 중
+BUSY = ("3D 검사 중", "PatchCore 검사 중", "YOLO 검사 중") + HOLD_STATUS
 # 3D 검사(bridge_3d/save_3d_to_db.py)가 남긴 검사번호. 이어받으면 consumed=true 로 바꿔 두 번 쓰지 않는다
 HANDOFF = ROOT.parent / "handoff" / "latest.json"
 # 장비 안전 상태 표시 이름. 검사 허용: 센터링 OFF(정위치) + 인터락 0(정상)
@@ -116,9 +119,42 @@ class SimTurntable:
     """Turntable 과 같은 메서드를 가진 가짜 턴테이블 (초당 30도)"""
     SPEED = 30.0
 
-    def __init__(self):
+    def __init__(self, sensors=False):
         self.position_deg = 0.0
         self._started = None
+        # 센서 시뮬레이션 (--sim-sensors): 3D 펌웨어처럼 한 칸씩 돌고 인터락·놓임 검사를 흉내 낸다
+        self.has_sensors = sensors
+        self.continuous = not sensors
+        self.fw_cm = [80, 80]
+        self.zone_occupied = False   # 시험용: 사람이 보호구역에 있음
+        self.tripped = False         # 인터락 걸림 (구역에 들어오면 켜지고, 비워도 리셋해야 풀림)
+        self.placement_ok = True
+
+    def enter_zone(self):
+        self.zone_occupied = self.tripped = True
+        self.fw_cm = [12, 80]
+
+    def leave_zone(self):
+        self.zone_occupied = False
+        self.fw_cm = [80, 80]
+
+    def interlock_state(self):
+        return ("1" if self.tripped else "0") if self.has_sensors else None
+
+    def reset_interlock(self):
+        if self.zone_occupied:
+            return False, "NOT_CLEAR"
+        self.tripped = False
+        return True, "OK"
+
+    def resume_rotation(self, target_deg):
+        self.rotate(target_deg - self.position_deg)
+
+    def check_placement(self):
+        return (True, "OK") if self.placement_ok else (False, "OFFSET_X")
+
+    def calibrate_placement(self):
+        return True
 
     def _now_angle(self):
         if self._started is None:
@@ -138,8 +174,16 @@ class SimTurntable:
         self.position_deg = 0.0
 
     def rotate(self, deg):
-        """정해진 각도만큼 돌고 멈춤 (PatchCore 각도별 촬영용)"""
-        time.sleep(abs(deg) / self.SPEED)
+        """정해진 각도만큼 돌고 멈춤 (PatchCore 각도별 촬영용). 인터락이 걸리면 그 자리에서 멈추고 InterlockStop"""
+        if self.tripped:
+            raise InterlockStop("ERR,INTERLOCK")
+        done, tick = 0.0, 0.05
+        while done < abs(deg):
+            time.sleep(tick)
+            done += self.SPEED * tick
+            if self.tripped:
+                self.position_deg += min(done, abs(deg)) * (1 if deg > 0 else -1)
+                raise InterlockStop("ERR,INTERLOCK")
         self.position_deg += deg
 
     def finish_turn(self):
@@ -283,8 +327,12 @@ class Engine(threading.Thread):
     """카메라·턴테이블·YOLO 를 다루는 스레드. 화면(Tk)은 건드리지 않고 events 큐로만 알린다.
     흐름은 yolo_live.main() 과 같다: 시작 → 연속 회전 → 0.80 이상 결함 → 정지·재검출·저장 → 재회전"""
     def __init__(self, sim, events, sender, mes_settings, safety=lambda: ("UNKNOWN", "UNKNOWN"),
-                 gate_3d=True, sim_3d="pass", patchcore_on=lambda: True, patchcore_only=False):
+                 gate_3d=True, sim_3d="pass", patchcore_on=lambda: True, patchcore_only=False, sim_sensors=False):
         super().__init__(daemon=True)
+        self.sim_sensors = sim_sensors  # 시뮬레이션에서 센서(인터락·놓임) 있는 장비를 흉내 낼지
+        self.placement_state = "UNKNOWN"  # 센서 장비의 센터링 값: 놓임 검사 OK → OFF, 어긋남 → ON, 못 했으면 UNKNOWN
+        self.sensor_sent = 0.0
+        self.trips_3d = 0  # 이번 프로그램에서 3D 스캔 중 인터락이 걸린 횟수 (기록용)
         self.patchcore_only = patchcore_only  # True: PatchCore 판정까지만 하고 YOLO 는 하지 않는다
         self.patchcore_on = patchcore_on  # 화면의 [PatchCore 먼저] 체크 상태
         self.patchcore = None             # PatchCoreInspector (불러오기 실패하면 None → PatchCore 검사 보류)
@@ -300,8 +348,8 @@ class Engine(threading.Thread):
         self.events = events
         self.sender = sender
         self.mes_settings = mes_settings  # 화면 입력값을 읽어 오는 함수
-        # 장비 안전 상태 (센터링, 인터락) 를 돌려주는 함수. 센서가 없어서 지금은 화면에서 작업자가 고른 값.
-        # 센서를 붙이면 이 함수만 센서 값을 읽도록 바꾸면 된다 (응답이 끊기면 "UNKNOWN" 을 돌려줄 것)
+        # 장비 안전 상태 (센터링, 인터락) 를 돌려주는 함수. 화면에서 작업자가 고른 값 — 센서가 없는 장비(비전용 펌웨어)에서만 쓴다.
+        # 센서가 있는 장비(3D 펌웨어 기반)는 _safety_now() 가 센서 값을 읽는다 (응답이 끊기면 "UNKNOWN")
         self.safety = safety
         self.commands = queue.Queue()
         self.frame_lock = threading.Lock()
@@ -325,7 +373,7 @@ class Engine(threading.Thread):
     def _open_table(self):
         """턴테이블 연결 (3D 검사 뒤에 다시 연결할 때도 쓴다)"""
         if self.sim:
-            self.table = SimTurntable()
+            self.table = SimTurntable(sensors=self.sim_sensors)
         else:
             self.table = live.Turntable(port=config.SERIAL_PORT)
             self.table.stop()  # 이미 회전 중인 보드도 정지 상태로 맞춘다
@@ -461,6 +509,10 @@ class Engine(threading.Thread):
             if command == "go3d":  # [배경 촬영]·[스캔 시작] 버튼: 3D 스캔의 Space 대기를 넘긴다
                 GO_FILE.parent.mkdir(parents=True, exist_ok=True)
                 GO_FILE.write_text("go", encoding="utf-8")
+            if command == "reset":  # [인터락 리셋] 버튼: 3D 스캔의 인터락 대기에 리셋 요청 (펌웨어에 U 명령이 있어야 함)
+                RESET_FILE.parent.mkdir(parents=True, exist_ok=True)
+                RESET_FILE.write_text("reset", encoding="utf-8")
+                self._log("인터락 리셋 요청을 3D 스캔에 보냈습니다")
             if command in ("stop", "quit"):
                 proc.terminate()
                 try:
@@ -481,6 +533,7 @@ class Engine(threading.Thread):
                 label, hint = {
                     "background": ("3D: 배경 촬영", "턴테이블을 비운 뒤 [3D: 배경 촬영]을 누르세요 (카메라 창에서 Space 도 됨)"),
                     "scan": ("3D: 스캔 시작", "물체를 턴테이블 중앙에 올린 뒤 [3D: 스캔 시작]을 누르세요. 누르면 턴테이블이 돌며 스캔합니다"),
+                    "retry": ("물체 다시 놓음 → 진행", "놓임 검사가 불량입니다. 물체를 다시 놓은 뒤 이 버튼을 누르세요 (중단은 [정지])"),
                 }.get(kind, ("진행", "준비되면 [진행]을 누르세요"))
                 self._state(go_label=label)
                 self._log("3D 대기: " + hint)
@@ -488,6 +541,20 @@ class Engine(threading.Thread):
             if line.startswith("@@GO"):
                 self._state(go_label="")
                 continue
+            if line.startswith("@@INTERLOCK_CLEARED"):
+                self._log("3D 스캔: 인터락이 풀려 남은 각도부터 이어서 스캔합니다")
+                self._state(status="3D 검사 중", hold="")
+                continue
+            if line.startswith("@@INTERLOCK"):
+                self.trips_3d += 1
+                self._log("3D 스캔 중 인터락 발동: 턴테이블이 멈췄습니다. 구역을 비우고 물체가 움직이지 않았는지 확인한 뒤 [인터락 리셋]을 누르세요")
+                self._state(status="인터락 정지(3D)", hold="reset3d")
+                self._submit_safety("DIMENSION", self.placement_state, "1", None, "3D 스캔 중 인터락 발동")
+                continue
+            if "놓임 검사 OK" in line:
+                self.placement_state = "OFF"
+            elif line.lstrip().startswith("[놓임 불량]"):
+                self.placement_state = "ON" if any(c in line for c in ("OFFSET_X", "OFFSET_Y", "MISSING")) else "UNKNOWN"
             if line.strip():
                 self._log("  3D | " + line[:160])
                 if self.log3d is not None:  # 화면 기록은 지워지므로 3D 출력 전체를 파일에도 남긴다
@@ -515,7 +582,11 @@ class Engine(threading.Thread):
     def _scan_3d(self, camera, table, last_frame):
         """[3D 검사]: 안전 확인 → 장비 연결을 3D 에 넘김 → 스캔·병합·측정·DB 저장 → 장비 다시 연결.
         반환: 새 (camera, table, last_frame)"""
-        centering, interlock = self.safety()
+        sensors = self._has_sensors(table)
+        if sensors:  # 센서 장비: 인터락은 실제 값. 센터링(놓임)은 물체를 올린 뒤 3D 스캔 안에서 검사하므로 여기서는 보지 않는다
+            interlock, centering = table.interlock_state(), "OFF"
+        else:
+            centering, interlock = self.safety()
         if not safety_ok(centering, interlock):
             self._log(f"3D 검사 금지: 센터링 {CENTERING_KO.get(centering, centering)} / "
                       f"인터락 {INTERLOCK_KO.get(interlock, interlock)} → 상태 확인 후 다시 시작하세요")
@@ -526,10 +597,30 @@ class Engine(threading.Thread):
         env = {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "VISIONQC_DB_URL": settings["db_url"],
                "VISIONQC_3D_SERIAL_PORT": config.SERIAL_PORT, "VISIONQC_3D_GO_FILE": str(GO_FILE),
                "VISIONQC_3D_LIMITS": json.dumps(getattr(config, "DIM_LIMITS_3D", {}))}  # 턴테이블은 3D·YOLO 가 같은 아두이노
-        bridge = [PYTHON_3D, "-u", str(BRIDGE_3D), "--product", settings["product"],
-                  "--centering", centering, "--interlock", interlock]
-        if settings["serial"]:
-            bridge += ["--serial", settings["serial"]]
+        env["VISIONQC_3D_RESET_FILE"] = str(RESET_FILE)
+        RESET_FILE.unlink(missing_ok=True)  # 이전 리셋 신호가 남아 있으면 바로 리셋돼 버린다
+        self.placement_state = "UNKNOWN"
+        self.trips_3d = 0
+
+        def bridge_cmd(centering, interlock):
+            cmd = [PYTHON_3D, "-u", str(BRIDGE_3D), "--product", settings["product"],
+                   "--centering", centering, "--interlock", interlock]
+            if settings["serial"]:
+                cmd += ["--serial", settings["serial"]]
+            return cmd
+
+        def measured_safety(session):
+            """센서 장비: 측정 시점 안전 상태를 3D 스캔 기록(meta.json)에서 얻는다. 센터링은 스캔 전 놓임 검사 결과,
+            인터락은 스캔이 끝까지 됐다는 것 = 마지막 인터락이 풀린 상태(0). 센서가 없으면 화면에서 고른 값"""
+            if not sensors:
+                return centering, interlock
+            if self.sim:
+                return "OFF", "0"
+            try:
+                meta = json.loads((Path(session) / "meta.json").read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                return "UNKNOWN", "UNKNOWN"
+            return ("OFF" if (meta.get("placement_check") or {}).get("ok") else "UNKNOWN"), "0"
         logs = ROOT / "captures" / "3d_logs"
         logs.mkdir(parents=True, exist_ok=True)
         log_path = logs / f"{datetime.now():%Y%m%d_%H%M%S}.log"
@@ -544,13 +635,14 @@ class Engine(threading.Thread):
             if self.sim:
                 session = self._fake_3d_session()
                 self._log(f"  3D | (시뮬레이션) 가짜 측정값 '{self.sim_3d}' 사용: {session.name}")
-                done = self._run_proc(bridge + [str(session)], ROOT, env) == 0
+                done = self._run_proc(bridge_cmd(*measured_safety(session)) + [str(session)], ROOT, env) == 0
             else:
                 self._close_hw()
                 camera = table = None
                 scans = STATION_3D / "scans"
                 before = {d.name for d in scans.glob("*")} if scans.is_dir() else set()
-                done = self._run_proc([PYTHON_3D, "-u", str(RUN_3D), str(STATION_3D), "turntable_scan.py"], ROOT, env) == 0
+                scan_args = ["turntable_scan.py", "--placement"] if sensors else ["turntable_scan.py"]  # 센서 장비: 스캔 전 놓임 검사
+                done = self._run_proc([PYTHON_3D, "-u", str(RUN_3D), str(STATION_3D), *scan_args], ROOT, env) == 0
                 session = self._newest_session(before) if done else None
                 for step in ("merge_turntable_scans.py", "measure_object.py"):
                     if not session:
@@ -561,9 +653,11 @@ class Engine(threading.Thread):
                                           ROOT, env) == 0
                     if not done:
                         break
-                done = bool(session) and done and self._run_proc(bridge + [str(session)], ROOT, env) == 0
+                done = bool(session) and done and self._run_proc(bridge_cmd(*measured_safety(session)) + [str(session)], ROOT, env) == 0
+                if done and self.trips_3d:
+                    self._log(f"3D 스캔 중 인터락이 {self.trips_3d}번 걸렸다가 풀렸습니다 (알람은 DB 에 기록됨, 측정값은 풀린 뒤 상태로 저장)")
         finally:
-            self._state(go_label="")
+            self._state(go_label="", hold="")
             self.log3d.close()
             self.log3d = None
             if not self.sim:
@@ -642,15 +736,16 @@ class Engine(threading.Thread):
                     self._state(status="정지", angle=table.position_deg)
                 return command, None
             # 회전 전 장비 안전 확인. 이상이면 멈추고 보류 + 알람 (자동 재시작 안 함)
-            centering, interlock = self.safety()
+            status = f"PatchCore {i + 1}/{PATCHCORE_VIEWS}"
+            centering, interlock = self._safety_now(table)
             if not safety_ok(centering, interlock):
-                self._log(f"안전 이상으로 정지·보류: 센터링 {CENTERING_KO.get(centering, centering)} / "
-                          f"인터락 {INTERLOCK_KO.get(interlock, interlock)} (자동 재시작 안 함)")
-                self._state(status="보류(안전)", angle=table.position_deg)
-                self._submit_safety("PATCHCORE", centering, interlock, self.job["inspection_id"], "PatchCore 중 이상 감지")
-                return "stop", None
+                res = self._on_unsafe("PATCHCORE", table, centering, interlock, "PatchCore 중 이상 감지", status)
+                if res != "resume":
+                    return res, None
             if i:
-                table.rotate(step)
+                res = self._rotate_safely(table, step, "PATCHCORE", status)
+                if res != "ok":
+                    return res, None
             angle = table.position_deg
             self._state(angle=angle, status=f"PatchCore {i + 1}/{PATCHCORE_VIEWS}")
             frame, _ = camera.fresh(after=time.monotonic() + 0.2)  # 멈춘 뒤의 새 프레임
@@ -679,8 +774,141 @@ class Engine(threading.Thread):
             self._log(f"PatchCore {i + 1}/{PATCHCORE_VIEWS} ({angle:.0f}°): 점수 {result['score']:.3f}"
                       + (" ← 기준 이상" if result["anomalous"] else ""))
             self._state(pc_score=f"{max(scores):.3f} / {pc.threshold:.3f}")
-        table.finish_turn()  # 남은 각도를 돌아 0도로
+        res = self._finish_turn_safely(table, "PATCHCORE", "PatchCore 검사 중")  # 남은 각도를 돌아 0도로
+        if res != "ok":
+            return res, None
         return "done", max(scores)
+
+    # ---- 장비 안전 상태 (센서) · 인터락 정지 · 이어서 진행
+    @staticmethod
+    def _has_sensors(table):
+        return bool(table is not None and getattr(table, "has_sensors", False))
+
+    def _safety_now(self, table):
+        """(센터링, 인터락). 센서가 있는 장비면 센서 값: 인터락은 펌웨어 상태 줄, 센터링은 마지막 놓임 검사 결과.
+        센서가 없는 장비는 화면에서 작업자가 고른 값. 읽는 김에 화면의 센서 표시도 0.5초마다 갱신한다"""
+        if not self._has_sensors(table):
+            return self.safety()
+        interlock = table.interlock_state()
+        if time.monotonic() - self.sensor_sent >= 0.5:
+            self.sensor_sent = time.monotonic()
+            self._state(sensor_mode=True, interlock=interlock, centering=self.placement_state,
+                        sensor_cm=list(getattr(table, "fw_cm", [])))
+        return self.placement_state, interlock
+
+    def _check_placement(self, table):
+        """물체 놓임 검사(레이저) 결과를 센터링 값으로 저장 (OFF 정위치 / ON 어긋남 / UNKNOWN 못 함·불안정)"""
+        try:
+            ok, code = table.check_placement()
+        except InterlockStop:
+            self.placement_state = "UNKNOWN"
+            self._log("놓임 검사를 못 했습니다: 인터락이 걸려 있습니다. 구역을 비우고 [인터락 리셋]을 누르세요")
+        except Exception as exc:
+            self.placement_state = "UNKNOWN"
+            self._log(f"놓임 검사 실패: {exc}")
+        else:
+            if ok:
+                self.placement_state = "OFF"
+                self._log("놓임 검사 OK: 물체가 정위치입니다 (센터링 OFF)")
+            else:
+                self.placement_state = "ON" if code in ("OFFSET_X", "OFFSET_Y", "MISSING") else "UNKNOWN"
+                self._log(f"놓임 검사 {code}: {PLACEMENT_MESSAGES.get(code, '')} → 물체를 다시 놓고 [놓임 검사]를 누르세요")
+        self._state(centering=self.placement_state)
+        return self.placement_state
+
+    def _on_unsafe(self, stage, table, centering, interlock, message, resume_status):
+        """검사 중 안전 이상. 항상 DB 에 알람을 남긴다.
+        센서 장비의 인터락이면 즉시 멈추고 작업자 조치를 기다려 "resume"(이어서) / "stop" / "quit" 를 돌려준다.
+        그 밖(센터링 어긋남, 센서 없는 장비)은 예전처럼 정지·보류 후 "stop" (자동 재시작 안 함)"""
+        self._log(f"안전 이상: 센터링 {CENTERING_KO.get(centering, centering)} / "
+                  f"인터락 {INTERLOCK_KO.get(interlock, interlock)}")
+        self._submit_safety(stage, centering, interlock, getattr(self, "job", {}).get("inspection_id"), message)
+        if not (self._has_sensors(table) and interlock != "0"):
+            self._log("정지·보류합니다 (자동 재시작 안 함)")
+            self._state(status="보류(안전)", angle=table.position_deg)
+            return "stop"
+        return self._hold_interlock(stage, table, centering, resume_status)
+
+    def _hold_interlock(self, stage, table, centering, resume_status):
+        """인터락 정지: 작업자가 [인터락 리셋] → [이어서 진행]을 누를 때까지 기다린다 (화면에서 사람 없음·물체 이동 없음을 확인한 뒤).
+        보드의 물리 리셋 버튼으로 풀어도 같다. 반환 "resume" / "stop" / "quit". 이 동안 모터는 펌웨어가 멈춘 상태"""
+        iid = getattr(self, "job", {}).get("inspection_id")
+        self._state(status="인터락 정지", angle=table.position_deg, hold="reset")
+        self._log("인터락 정지: 구역을 비우고 물체가 움직이지 않았는지 확인한 뒤 [인터락 리셋] → [이어서 진행]을 누르세요 (보드 리셋 버튼도 됨)")
+        cleared = False
+        while True:
+            try:
+                command, _ = self.commands.get(timeout=0.2)
+            except queue.Empty:
+                command = None
+            if command == "quit":
+                self.commands.put((command, None))
+                return "quit"
+            if command == "stop":
+                self._log("인터락 정지 중 검사를 중단했습니다 (이 검사는 결과를 더 저장하지 않음)")
+                self._state(status="정지", hold="")
+                return "stop"
+            if not cleared:
+                if command == "reset":
+                    try:
+                        ok, why = table.reset_interlock()
+                    except Exception as exc:
+                        self._log(f"인터락 리셋 실패: {exc}")
+                        continue
+                    if not ok:
+                        self._log({"NOT_CLEAR": "아직 보호구역에 사람이나 물체가 있거나, 비운 지 1초가 안 됐습니다. 비운 뒤 다시 누르세요",
+                                   "FAULT": "센서 고장 상태입니다. 초음파 센서 배선·가림을 확인하세요"}.get(why, f"리셋 거부: {why}"))
+                        continue
+                    self._log("인터락 리셋됨 (작업자 확인) → [이어서 진행]을 누르세요")
+                    self._submit_safety(stage, centering, "0", iid, "인터락 리셋 (작업자가 구역·물체 확인)")
+                    cleared = True
+                elif table.interlock_state() == "0":
+                    self._log("보드의 리셋 버튼으로 인터락이 풀렸습니다 → [이어서 진행]을 누르세요")
+                    self._submit_safety(stage, centering, "0", iid, "인터락 리셋 (보드 버튼)")
+                    cleared = True
+                if cleared:
+                    self._state(status="인터락 해제 · 이어서 진행 대기", hold="resume")
+            elif command == "resume":
+                if table.interlock_state() != "0":
+                    self._log("다시 인터락이 걸렸습니다. [인터락 리셋]부터 다시 하세요")
+                    cleared = False
+                    self._state(status="인터락 정지", hold="reset")
+                    continue
+                self._log("이어서 진행합니다")
+                self._state(status=resume_status, hold="")
+                return "resume"
+            self._safety_now(table)  # 화면의 센서 표시 갱신
+
+    def _rotate_safely(self, table, deg, stage, resume_status):
+        """deg 만큼 회전. 인터락으로 멈추면 리셋될 때까지 기다렸다가 남은 각도만 이어서 돈다. 반환 "ok" / "stop" / "quit" """
+        target = table.position_deg + deg
+        try:
+            table.rotate(deg)
+            return "ok"
+        except InterlockStop:
+            pass
+        while True:
+            res = self._on_unsafe(stage, table, self.placement_state, "1", "회전 중 인터락 발동", resume_status)
+            if res != "resume":
+                return res
+            try:
+                table.resume_rotation(target)
+                return "ok"
+            except InterlockStop:
+                continue
+
+    def _finish_turn_safely(self, table, stage, resume_status):
+        """남은 각도를 돌아 0도로 (finish_turn 과 같은 동작, 인터락 대응). 반환 "ok" / "stop" / "quit" """
+        if not self._has_sensors(table):
+            table.finish_turn()
+            return "ok"
+        rest = (-table.position_deg) % 360.0
+        if rest > 1e-6:
+            res = self._rotate_safely(table, rest, stage, resume_status)
+            if res != "ok":
+                return res
+        table.finish_turn()  # 이제 0도(360의 배수)라 돌 각도 없이 Z 만
+        return "ok"
 
     def _begin_job(self, folder, handoff=None):
         """한 바퀴 시작 → DB 에 검사 1회 생성. 설정은 이 순간 값으로 고정 (도중에 화면 값을 바꿔도 섞이지 않게)
@@ -738,6 +966,8 @@ class Engine(threading.Thread):
         folder = None
         last_poll = 0.0
         while True:
+            if not running and self._has_sensors(table):
+                self._safety_now(table)  # 대기 중에도 센서 값을 화면에 보여 준다
             if self._show_3d_view(running):
                 self._update_3d_preview()
                 result, found = None, []
@@ -778,6 +1008,23 @@ class Engine(threading.Thread):
                 if not running:
                     camera, table, last_frame = self._scan_3d(camera, table, last_frame)
                 continue
+            if command in ("reset", "calibrate", "placement"):  # 센서 장비의 대기 중 조작 (검사 중에는 인터락 정지 화면에서만 리셋)
+                if not self._has_sensors(table) or running:
+                    self._log("이 조작은 센서가 있는 장비(3D 펌웨어 기반)에서 대기 중일 때만 됩니다")
+                elif command == "reset":
+                    ok, why = table.reset_interlock()
+                    self._log("인터락 리셋됨" if ok else {"NOT_CLEAR": "아직 구역에 사람이 있거나 비운 지 1초가 안 됐습니다",
+                                                          "FAULT": "센서 고장 상태입니다. 배선·가림을 확인하세요"}.get(why, f"리셋 거부: {why}"))
+                elif command == "calibrate":
+                    try:
+                        table.calibrate_placement()
+                        self._log("놓임 검사 보정 완료 (빈 턴테이블 기준)")
+                    except Exception as exc:
+                        self._log(f"놓임 검사 보정 실패: {exc}")
+                else:
+                    self._check_placement(table)
+                self.sensor_sent = 0.0
+                continue
             if command == "camera":
                 self.force_yolo_view = True
                 if camera is None:
@@ -810,7 +1057,9 @@ class Engine(threading.Thread):
                     self._refresh_gate()
                     continue
                 # 장비 안전 사전 확인: 센터링 OFF + 인터락 0 이 아니면 시작하지 않고 DB 에 알람 기록
-                centering, interlock = self.safety()
+                if self._has_sensors(table):
+                    self._check_placement(table)  # 센서 장비: 시작할 때마다 물체 놓임을 레이저로 확인
+                centering, interlock = self._safety_now(table)
                 if not safety_ok(centering, interlock):
                     self._log(f"검사 금지: 센터링 {CENTERING_KO.get(centering, centering)} / "
                               f"인터락 {INTERLOCK_KO.get(interlock, interlock)} → 상태 확인 후 다시 시작하세요")
@@ -847,7 +1096,7 @@ class Engine(threading.Thread):
                         continue
                     self._log(f"PatchCore 불합격 (최고 점수 {score:.3f} ≥ 기준 {pc.threshold:.3f}) → YOLO 로 결함 확인")
                     self._state(verdict="PatchCore 불합격")
-                    centering, interlock = self.safety()
+                    centering, interlock = self._safety_now(table)
                     if not safety_ok(centering, interlock):
                         self._log("안전 이상으로 YOLO 를 시작하지 않습니다 (보류)")
                         self._state(status="보류(안전)")
@@ -875,13 +1124,15 @@ class Engine(threading.Thread):
 
             if stepping:
                 # ---- 단계 모드: 한 칸 돌고(안정화까지 기다림) → 멈춘 영상으로 검사 → 다음 칸
-                centering, interlock = self.safety()
+                centering, interlock = self._safety_now(table)
                 if not safety_ok(centering, interlock):
-                    running = False
-                    self._log(f"안전 이상으로 정지·보류: 센터링 {CENTERING_KO.get(centering, centering)} / "
-                              f"인터락 {INTERLOCK_KO.get(interlock, interlock)} (자동 재시작 안 함)")
-                    self._state(status="보류(안전)", angle=table.position_deg)
-                    self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "검사 중 이상 감지")
+                    res = self._on_unsafe("YOLO", table, centering, interlock, "검사 중 이상 감지", "YOLO 검사 중")
+                    if res == "quit":
+                        return
+                    if res == "stop":
+                        running = False
+                    else:
+                        last_frame = time.monotonic()
                     continue
                 angle = table.position_deg
                 self._state(angle=angle)
@@ -898,11 +1149,19 @@ class Engine(threading.Thread):
                         self._submit_capture(folder, captures, confirmed, angle)
                     last_capture_angle = angle
                 if angle >= 360.0 - 1e-6:
-                    table.finish_turn()
+                    res = self._finish_turn_safely(table, "YOLO", "YOLO 검사 중")
+                    if res == "quit":
+                        return
                     running = False
-                    self._finish_job(captures)
+                    if res == "ok":
+                        self._finish_job(captures)
                     continue
-                table.rotate(min(YOLO_STEP_DEG, 360.0 - angle))
+                res = self._rotate_safely(table, min(YOLO_STEP_DEG, 360.0 - angle), "YOLO", "YOLO 검사 중")
+                if res == "quit":
+                    return
+                if res == "stop":
+                    running = False
+                    continue
                 last_frame = time.monotonic()  # 돌린 뒤의 새 영상으로 검사
                 continue
 
@@ -956,15 +1215,19 @@ class Engine(threading.Thread):
 
 # ---------------------------------------------------------------- 화면
 class App:
-    def __init__(self, root, sim, gate_3d=True, sim_3d="pass", patchcore_only=False):
+    def __init__(self, root, sim, gate_3d=True, sim_3d="pass", patchcore_only=False, sim_sensors=False):
         self.root = root
         self.events = queue.Queue()
         self.sender = Sender(self.events)
         self.sender.start()
         self._patchcore_on = True
         self.engine = Engine(sim, self.events, self.sender, self.mes_settings, self.safety_state, gate_3d, sim_3d,
-                             lambda: self._patchcore_on, patchcore_only)
+                             lambda: self._patchcore_on, patchcore_only, sim_sensors)
         self.yolo_ready = not gate_3d
+        self.sim_sensors = sim_sensors
+        self.sensor_mode = False    # 센서가 있는 장비로 확인되면 True (그때부터 센터링·인터락은 센서 값)
+        self.sensor_interlock = "UNKNOWN"
+        self.hold = ""              # 인터락 정지 중 작업자가 할 일: reset / resume / reset3d
         self.photo = None
         self.view_scale = 1.0
         self._mes_cache = {}
@@ -1019,11 +1282,13 @@ class App:
             ttk.Label(r, text=label, width=9).pack(side="left")
             ttk.Label(r, textvariable=self.vars[key]).pack(side="left")
 
-        # 장비 안전 상태: 센서가 아직 없어서 작업자가 확인 후 고른다. 미확인이면 검사를 시작할 수 없다.
-        # (검사 중에 이상으로 바꾸면 즉시 정지·보류되고 DB 에 알람이 남는다)
+        # 장비 안전 상태: 센서가 있는 장비(3D 펌웨어 기반)면 센서 값이 자동으로 들어온다 (아래 목록은 비활성).
+        # 센서가 없는 장비(비전용 펌웨어)는 작업자가 확인 후 고른다. 미확인이면 검사를 시작할 수 없다.
+        # (검사 중에 이상으로 바뀌면 즉시 정지되고 DB 에 알람이 남는다. 센서 장비는 인터락 리셋 뒤 이어서 진행할 수 있다)
         safe = ttk.LabelFrame(side, text="장비 안전 상태", padding=8)
         safe.pack(fill="x", pady=(8, 0))
         self.safety_vars = {}
+        self.safety_boxes = {}
         default = ("OFF", "0") if self.sim else ("UNKNOWN", "UNKNOWN")  # 시뮬레이션은 정상으로 시작
         for label, key, choices, value in (
                 ("센터링", "centering", [("UNKNOWN", "미확인"), ("OFF", "OFF 정위치"), ("ON", "ON 위치 이상")], default[0]),
@@ -1033,12 +1298,40 @@ class App:
             ttk.Label(r, text=label, width=9).pack(side="left")
             names = [n for _, n in choices]
             var = tk.StringVar(value=dict(choices)[value])
-            box = ttk.Combobox(r, textvariable=var, values=names, state="readonly", width=16)
-            box.pack(side="left")
+            cbox = ttk.Combobox(r, textvariable=var, values=names, state="readonly", width=16)
+            cbox.pack(side="left")
             var.trace_add("write", lambda *_: self._read_safety())
             self.safety_vars[key] = (var, {n: c for c, n in choices})
+            self.safety_boxes[key] = cbox
+        self.safety_names = {key: {c: n for n, c in codes.items()} for key, (_, codes) in self.safety_vars.items()}
         ttk.Label(safe, text="센터링 OFF + 인터락 0 일 때만 검사", foreground="#6b7686").pack(anchor="w", pady=(4, 0))
         self._read_safety()
+
+        # 센서 장비용: 센서 상태 · 놓임 보정/검사 · 인터락 리셋 · 이어서 진행
+        self.sensor_text = tk.StringVar(value="")
+        ttk.Label(safe, textvariable=self.sensor_text, foreground="#6b7686").pack(anchor="w")
+        row = ttk.Frame(safe)
+        row.pack(fill="x", pady=(2, 0))
+        self.btn_cal = ttk.Button(row, text="놓임 보정", command=self.calibrate_placement)
+        self.btn_chk = ttk.Button(row, text="놓임 검사", command=lambda: self.engine.send("placement"))
+        self.btn_cal.pack(side="left", expand=True, fill="x")
+        self.btn_chk.pack(side="left", expand=True, fill="x", padx=(4, 0))
+        self.confirm_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(safe, text="구역에 사람이 없고 물체가 움직이지 않았음을 확인했음",
+                        variable=self.confirm_var).pack(anchor="w", pady=(4, 0))
+        row = ttk.Frame(safe)
+        row.pack(fill="x")
+        self.btn_reset = ttk.Button(row, text="인터락 리셋", command=lambda: self.confirmed("reset"))
+        self.btn_resume = ttk.Button(row, text="이어서 진행", command=lambda: self.confirmed("resume"))
+        self.btn_reset.pack(side="left", expand=True, fill="x")
+        self.btn_resume.pack(side="left", expand=True, fill="x", padx=(4, 0))
+        if self.sim_sensors:  # 시험용: 사람이 보호구역에 들어오고 나가는 것을 흉내
+            row = ttk.Frame(safe)
+            row.pack(fill="x", pady=(4, 0))
+            ttk.Button(row, text="시험: 구역 진입", command=lambda: self.engine.table and self.engine.table.enter_zone()).pack(
+                side="left", expand=True, fill="x")
+            ttk.Button(row, text="시험: 구역 비움", command=lambda: self.engine.table and self.engine.table.leave_zone()).pack(
+                side="left", expand=True, fill="x", padx=(4, 0))
 
         mes = ttk.LabelFrame(side, text="DB 저장 (MES 는 DB 에서 읽음)", padding=8)
         mes.pack(fill="x", pady=(8, 0))
@@ -1073,6 +1366,19 @@ class App:
     def safety_state(self):
         return getattr(self, "_safety_cache", ("UNKNOWN", "UNKNOWN"))
 
+    def confirmed(self, command):
+        """리셋·이어서 진행은 작업자가 구역·물체를 확인했다는 체크를 해야 보낸다 (누를 때마다 다시 확인)"""
+        if not self.confirm_var.get():
+            messagebox.showwarning("확인 필요", "보호구역에 사람이 없고 물체가 움직이지 않았는지 확인한 뒤,\n"
+                                   "'확인했음'에 체크하고 누르세요.")
+            return
+        self.confirm_var.set(False)
+        self.engine.send(command)
+
+    def calibrate_placement(self):
+        if messagebox.askokcancel("놓임 검사 보정", "턴테이블 위를 비웠나요?\n빈 상태에서 레이저와 광센서의 기준을 잡습니다 (약 3초)."):
+            self.engine.send("calibrate")
+
     def add_log(self, text):
         self.log.insert("end", f"{datetime.now():%H:%M:%S}  {text}")
         if self.log.size() > 600:
@@ -1094,7 +1400,11 @@ class App:
                    self.btn_go: not locked and bool(self.go_label),
                    self.btn_start: not locked and not busy and self.yolo_ready,
                    self.btn_stop: not locked, self.btn_roi: not locked and not busy,
-                   self.btn_cam: not locked and not busy}
+                   self.btn_cam: not locked and not busy,
+                   self.btn_cal: self.sensor_mode and not busy, self.btn_chk: self.sensor_mode and not busy,
+                   self.btn_reset: self.sensor_mode and (self.hold in ("reset", "reset3d")
+                                                         or (self.hold == "" and not busy and self.sensor_interlock != "0")),
+                   self.btn_resume: self.hold == "resume"}
         for b, ok in enabled.items():
             b.state(["!disabled"] if ok else ["disabled"])
 
@@ -1114,6 +1424,19 @@ class App:
                     elif k == "go_label":
                         self.go_label = v
                         self.btn_go.config(text=v or "3D 진행 버튼 (스캔 중 켜짐)")
+                    elif k == "hold":
+                        self.hold = v
+                    elif k == "sensor_mode":
+                        self.sensor_mode = bool(v)
+                        for box in self.safety_boxes.values():  # 센서 값이 들어오는 동안 손으로 못 바꾼다
+                            box.config(state="disabled" if v else "readonly")
+                    elif k in ("centering", "interlock"):
+                        if k == "interlock":
+                            self.sensor_interlock = v
+                        var = self.safety_vars[k][0]
+                        var.set(self.safety_names[k].get(v, "미확인"))
+                    elif k == "sensor_cm":
+                        self.sensor_text.set("초음파 " + " / ".join("끊김" if c < 0 else f"{c}cm" for c in v) if v else "")
                     else:
                         self.vars[k].set(f"{v:.1f}°" if k == "angle" else str(v))
             elif kind == "pending":
@@ -1154,11 +1477,13 @@ def main():
     ap.add_argument("--sim-3d", choices=["pass", "recheck", "fail"], default="pass", help="--sim 일 때 가짜 3D 치수 결과")
     ap.add_argument("--no-gate", action="store_true", help="3D 검사 없이 [검사 시작]을 바로 누를 수 있게 함 (시험용)")
     ap.add_argument("--patchcore-only", action="store_true", help="PatchCore 만 실행 (3D 검사·YOLO 없이. 판정까지만)")
+    ap.add_argument("--sim-sensors", action="store_true", help="--sim 일 때 인터락·놓임 센서가 있는 장비를 흉내 (정지·리셋·이어서 진행 시험용)")
     args = ap.parse_args()
     root = tk.Tk()
     root.geometry("1100x760")
     only = args.patchcore_only
-    App(root, args.sim, gate_3d=not (args.no_gate or only), sim_3d=args.sim_3d, patchcore_only=only)
+    App(root, args.sim, gate_3d=not (args.no_gate or only), sim_3d=args.sim_3d, patchcore_only=only,
+        sim_sensors=args.sim and args.sim_sensors)
     root.mainloop()
 
 

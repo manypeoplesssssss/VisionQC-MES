@@ -28,6 +28,21 @@ except ImportError:  # pragma: no cover
 
 # 3D 펌웨어(v2.6)가 0.5초마다 보내는 상태 줄. 명령 응답이 아니므로 건너뛴다
 STATUS_PREFIXES = ("STAT,", "EVT,", "HINT,", "BEAM,")
+INTERLOCK_REPLIES = ("ERR,INTERLOCK", "PLACE,ERR,INTERLOCK", "CAL,ERR,INTERLOCK")   # 인터락 정지를 알리는 응답
+PLACEMENT_TIMEOUT_S = 15.0   # 놓임 검사·보정 응답 대기 (펌웨어 검사 최대 약 9초 + 여유)
+STAT_STALE_S = 2.5           # 상태 줄이 이만큼 끊기면 센서 응답 끊김(미확인)으로 본다 (펌웨어는 0.5초마다 보냄)
+
+PLACEMENT_MESSAGES = {
+    "OFFSET_X": "물체가 좌우(X)로 치우쳐 놓였습니다.",
+    "OFFSET_Y": "물체가 앞뒤(Y)로 치우쳐 놓였습니다.",
+    "MISSING": "빔 사이에 물체가 없습니다 (물체를 안 놓았거나 위치가 크게 벗어남).",
+    "BEAM_FAULT": "레이저/광센서 보정이 안 됐거나 빔이 약합니다 ([놓임 보정]을 먼저 하고, 빔 정렬을 확인하세요).",
+    "UNSTABLE": "물체가 흔들리거나 빛이 불안정해 판정이 확정되지 않았습니다.",
+}
+
+
+class InterlockStop(RuntimeError):
+    """회전·검사 도중 인터락으로 멈췄다 (펌웨어가 ERR,INTERLOCK 으로 알림). 모터는 이미 펌웨어가 멈춘 상태"""
 
 
 class Turntable:
@@ -52,7 +67,13 @@ class Turntable:
         self.position_deg = 0.0      # 누적 명령 각도 (한 바퀴 넘어도 계속 증가)
         # 연속 회전(S/X)을 지원하는가. 3D 펌웨어(v2.6)는 R/A/Z/P 만 있어서 stop() 때 False 로 바뀐다
         self.continuous = True
+        # 인터락 센서 상태 (3D 펌웨어가 0.5초마다 보내는 STAT,<상태>,<cm1>,<cm2> 줄에서 얻는다)
+        self.has_sensors = False     # 센서가 있는 펌웨어인가 (상태 줄이 오면 True)
+        self.fw_state = None         # RUN / TRIPPED / FAULT
+        self.fw_cm = []              # 초음파 거리(cm), 응답 없으면 -1
+        self.fw_seen = 0.0           # 마지막 상태 줄을 받은 시각 (time.monotonic)
         self._wait_ready()
+        self._detect_sensors()
 
     def _wait_ready(self, wait_s=4.0):
         # 우노는 포트를 열면 리셋되고 부팅 후 READY를 보낸다. 리셋이 안 되는
@@ -80,13 +101,53 @@ class Turntable:
             if buf.endswith(b"\n") or time.time() >= deadline:
                 return buf.decode(errors="ignore").strip()
 
+    def _note_status(self, line):
+        """상태 줄(STAT,/EVT,)에서 인터락 센서 상태를 갱신한다. 응답으로는 쓰지 않는다"""
+        if line.startswith(("STAT,", "EVT,")):
+            parts = line.split(",")
+            if len(parts) >= 2 and parts[1] in ("RUN", "TRIPPED", "FAULT"):
+                self.fw_state = parts[1]
+                self.fw_seen = time.monotonic()
+                self.has_sensors = True
+                if line.startswith("STAT,"):
+                    try:
+                        self.fw_cm = [int(v) for v in parts[2:]]
+                    except ValueError:
+                        pass
+
+    def _detect_sensors(self, wait_s=1.6):
+        """연결 직후 잠깐 들어 보고 상태 줄이 오면 '센서가 있는 펌웨어'로 판단한다 (비전용 펌웨어는 상태 줄을 안 보냄)"""
+        deadline = time.time() + wait_s
+        while time.time() < deadline and not self.has_sensors:
+            line = self._readline(timeout=0.5)
+            if line.startswith(STATUS_PREFIXES):
+                self._note_status(line)
+
+    def poll_status(self):
+        """명령을 보내지 않는 동안 쌓인 상태 줄을 읽어 센서 상태를 최신으로 만든다 (검사 스레드에서만 호출)"""
+        while self.ser.in_waiting:
+            line = self.ser.readline().decode(errors="ignore").strip()
+            if line.startswith(STATUS_PREFIXES):
+                self._note_status(line)
+
+    def interlock_state(self):
+        """인터락 값을 MES 규칙으로: "0" 정상(RUN), "1" 비정상(TRIPPED), "UNKNOWN" 미확인(센서 고장·상태 끊김).
+        센서가 없는 펌웨어면 None (화면의 수동 입력을 쓴다)"""
+        if not self.has_sensors:
+            return None
+        self.poll_status()
+        if time.monotonic() - self.fw_seen > STAT_STALE_S:
+            return "UNKNOWN"
+        return {"RUN": "0", "TRIPPED": "1"}.get(self.fw_state, "UNKNOWN")
+
     def _reply(self, timeout=None):
-        """명령 응답 1줄. 3D 펌웨어의 상태 줄(STAT, 등)은 건너뛴다"""
+        """명령 응답 1줄. 3D 펌웨어의 상태 줄(STAT, 등)은 건너뛰되 센서 상태는 기록한다"""
         deadline = time.time() + (self.cmd_timeout if timeout is None else timeout)
         while True:
             line = self._readline(timeout=max(0.1, deadline - time.time()))
             if not line.startswith(STATUS_PREFIXES):
                 return line
+            self._note_status(line)
             if time.time() >= deadline:
                 return ""
 
@@ -101,17 +162,20 @@ class Turntable:
                 break
         self.ser.reset_input_buffer()
 
-    def _command(self, cmd, expect_done=True, _retry=True):
+    def _command(self, cmd, expect_done=True, _retry=True, timeout=None):
         """명령 1줄을 보내고 응답 1줄을 돌려준다.
         expect_done=True 면 응답이 DONE 이 아닐 때 RuntimeError (회전·정지 명령용)"""
         self.ser.reset_input_buffer()  # 이전 명령의 남은 응답이 섞이지 않게 비운다
         self.ser.write((cmd + "\n").encode())
-        reply = self._reply()
+        reply = self._reply(timeout=timeout)
+        if reply.startswith(INTERLOCK_REPLIES):
+            self.fw_state = "TRIPPED"
+            raise InterlockStop(reply)
         if reply == "ERR" and _retry:
             # 명령 앞에 잡음이 붙어 인식 못한 경우 → 버퍼 정리 후 한 번만 재시도
             print(f"  [참고] {cmd!r}에 ERR 응답 → 시리얼 버퍼 정리 후 재시도")
             self._sync()
-            return self._command(cmd, expect_done, _retry=False)
+            return self._command(cmd, expect_done, _retry=False, timeout=timeout)
         if expect_done and reply != "DONE":
             raise RuntimeError(f"턴테이블 응답 이상: {cmd!r} -> {reply!r}")
         return reply
@@ -173,6 +237,46 @@ class Turntable:
             raise RuntimeError(
                 f"현재 각도(P) 응답이 숫자가 아닙니다: {reply!r}. v2.1 turntable.ino가 업로드됐는지, "
                 "시리얼 모니터에서 P를 보내 숫자가 오는지 확인하세요.") from None
+
+    # ---- 인터락 리셋 · 이어서 회전 · 놓임 검사 (3D 펌웨어 v2.6 + 'U' 명령 복사본) -----------------
+    def reset_interlock(self):
+        """프로그램에서 인터락 리셋 요청(U). 펌웨어가 물리 리셋 버튼과 같은 조건 (구역이 1초 이상 비어 있음)으로 판정한다.
+        (True, "OK") / (False, "NOT_CLEAR" 아직 구역에 있음 | "FAULT" 센서 고장)"""
+        reply = self._command("U", expect_done=False, timeout=5.0)
+        if reply == "RESET,OK":
+            self.fw_state = "RUN"
+            self.fw_seen = time.monotonic()
+            return True, "OK"
+        if reply.startswith("RESET,ERR,"):
+            return False, reply.split(",", 2)[2]
+        raise RuntimeError("이 보드의 펌웨어에는 리셋 명령(U)이 없습니다. station_vision/turntable/turntable_safety 를 올렸는지 확인하세요 "
+                           "(없으면 보드의 물리 리셋 버튼(D4)을 누릅니다)")
+
+    def resume_rotation(self, target_deg):
+        """인터락으로 멈춘 회전을 이어서 한다: 보드가 세는 실제 각도를 읽어 목표(누적 명령 각도)까지 남은 만큼만 돌린다"""
+        remaining = target_deg - self.reported_angle()
+        if remaining > 0.01:
+            self._command(f"R{remaining:.3f}")
+        self.position_deg = target_deg
+
+    def calibrate_placement(self):
+        """레이저·광센서 보정(K). 빔 사이를 비운 상태(빈 턴테이블)에서 한다. 약 2.5초. 성공 True, 실패 RuntimeError"""
+        reply = self._command("K", expect_done=False, timeout=PLACEMENT_TIMEOUT_S)
+        if reply == "CAL,OK":
+            return True
+        if reply.startswith("CAL,ERR,"):
+            raise RuntimeError(f"놓임 검사 보정 실패 ({reply}). 턴테이블이 비었는지, 레이저가 광센서를 정확히 비추는지 확인하세요.")
+        raise RuntimeError(f"놓임 검사 보정 응답 이상: {reply!r}. 놓임 검사가 들어 있는 펌웨어인지 확인하세요.")
+
+    def check_placement(self):
+        """물체 놓임 검사(C). (ok, code): OK / OFFSET_X / OFFSET_Y / MISSING / BEAM_FAULT / UNSTABLE.
+        모터가 멈춰 있을 때만 된다 (움직이는 중이면 ERR,BUSY)"""
+        reply = self._command("C", expect_done=False, timeout=PLACEMENT_TIMEOUT_S)
+        if reply == "PLACE,OK":
+            return True, "OK"
+        if reply.startswith("PLACE,ERR,"):
+            return False, reply.split(",", 2)[2]
+        raise RuntimeError(f"놓임 검사 응답 이상: {reply!r} (ERR,BUSY 면 모터가 움직이는 중, ERR 면 놓임 검사가 없는 펌웨어)")
 
     def close(self):
         """시리얼 포트 닫기 (다른 프로그램이나 아두이노 IDE 가 포트를 쓸 수 있게 된다)"""
