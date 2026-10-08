@@ -478,8 +478,8 @@ class Engine(threading.Thread):
             if line.startswith("@@WAIT "):  # 3D 스캔이 Space 를 기다리는 중 → 해당 버튼을 켠다
                 kind = line.split()[1]
                 label, hint = {
-                    "background": ("① 배경 촬영", "턴테이블을 비운 뒤 [① 배경 촬영]을 누르세요 (카메라 창에서 Space 도 됨)"),
-                    "scan": ("② 스캔 시작", "물체를 턴테이블 중앙에 올린 뒤 [② 스캔 시작]을 누르세요. 누르면 턴테이블이 돌며 스캔합니다"),
+                    "background": ("3D: 배경 촬영", "턴테이블을 비운 뒤 [3D: 배경 촬영]을 누르세요 (카메라 창에서 Space 도 됨)"),
+                    "scan": ("3D: 스캔 시작", "물체를 턴테이블 중앙에 올린 뒤 [3D: 스캔 시작]을 누르세요. 누르면 턴테이블이 돌며 스캔합니다"),
                 }.get(kind, ("진행", "준비되면 [진행]을 누르세요"))
                 self._state(go_label=label)
                 self._log("3D 대기: " + hint)
