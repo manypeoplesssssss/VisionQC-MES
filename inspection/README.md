@@ -31,7 +31,7 @@ station_vision handoff/ 의 검사번호를 읽어 → 치수 합격이면 Patch
 ```
 최종 결과(정상/치수 불합격/공정 불량 …)는 MES 서버가 자동으로 계산합니다.
 
-**장비 안전:** 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 센서가 없는 펌웨어(비전용)면 버튼 화면의 [장비 안전 상태]에서 작업자가 고릅니다 (기본 미확인 → 시작 불가). 센서용 펌웨어(`station_vision/turntable/turntable_safety`)를 올리면 센터링(레이저 놓임 검사)·인터락(초음파)이 실제 센서 값으로 들어오고, 인터락이 걸리면 즉시 멈췄다가 [인터락 리셋] → [이어서 진행]으로 멈춘 자리부터 이어갑니다 (`Engine._safety_now`, `_hold_interlock`. 사용법은 `docs/RUN_AFTER_REBOOT.md` 의 "센서 인터락").
+**장비 안전:** 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 센서가 없는 펌웨어(비전용)면 버튼 화면의 [장비 안전 상태]에서 작업자가 고릅니다 (기본 미확인 → 시작 불가). 센서용 펌웨어(`station_vision/turntable/turntable_safety`)를 올리면 인터락(초음파)이 실제 센서 값으로 들어오고 (센터링은 계속 작업자가 고름), 인터락이 걸리면 즉시 멈췄다가 [인터락 리셋] → [이어서 진행]으로 멈춘 자리부터 이어갑니다 (`Engine._safety_now`, `_hold_interlock`. 사용법은 `docs/RUN_AFTER_REBOOT.md` 의 "센서 인터락").
 3D 쪽 실행 순서와 연결 방법은 [bridge_3d/README.md](bridge_3d/README.md) (station_3d 코드는 그대로 두고 bridge_3d 가 결과만 읽음). PatchCore 는 `station_vision/patchcore_infer.py` 가 `visionPatchCore/patchcore_export/models/v3/model.ckpt` 를 읽어서 판정합니다 (학습 코드 폴더는 건드리지 않음, 모델 파일은 git 에 없음).
 
 ## 가상환경 만들기 (폴더마다 따로)
