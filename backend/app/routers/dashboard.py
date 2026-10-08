@@ -12,6 +12,7 @@ GET /api/dashboard/daily?date_from=&date_to=    일별 검사·불량 수 (기�
 """
 from collections import Counter, defaultdict
 from datetime import date, timedelta
+import pymysql
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
@@ -33,7 +34,6 @@ def _rows(db: Session, start, end) -> list[ProductInspection]:
 
 
 def defect_rate(defect: int, normal: int) -> float:
-    """불량률(%) = 불량 / (정상 + 불량). 대기 중인 검사는 아직 결과가 없으니 뺀다"""
     done = defect + normal
     return round(defect / done * 100, 2) if done else 0.0
 
@@ -42,65 +42,17 @@ def _v(x) -> str:
     return getattr(x, "value", x)
 
 
-@router.get("/summary", response_model=DashboardSummary)
-def summary(
-    d: date | None = Query(None, alias="date"),   # 쿼리스트링 이름은 date, 파이썬 변수는 d
-    recent: int = Query(12, ge=1, le=50),          # 최근 불량 몇 건 보여줄지
-    db: Session = Depends(get_db),
-    _user: AdminUser = Depends(get_current_user),
-):
-    d = d or date.today()
-    start, end = date_range(d, d)
-    rows = _rows(db, start, end)
-    A = EquipmentSafetyAlarm
-    active_alarms = db.scalar(select(func.count()).select_from(A).where(A.alarm_status == AlarmStatus.ACTIVE))
-    alarms_today = db.scalar(select(func.count()).select_from(A).where(A.occurred_at >= start, A.occurred_at < end))
-
-    by_final = {f.value: 0 for f in FinalResult}   # 0건인 결과도 나오게
-    stages = {"DIMENSION": Counter(), "PATCHCORE": Counter(), "YOLO": Counter()}
-    products: dict[str, Counter] = defaultdict(Counter)
-    classes, codes = Counter(), Counter()
-    for r in rows:
-        by_final[r.final_result] += 1
-        stages["DIMENSION"][_v(r.dimension_result)] += 1
-        stages["PATCHCORE"][_v(r.patchcore_result)] += 1
-        stages["YOLO"][_v(r.yolo_status)] += 1
-        group = "defect" if r.final_result in DEFECT_RESULTS else "pending" if r.final_result in PENDING_RESULTS else "normal"
-        products[r.product_name][group] += 1
-        for x in r.yolo_defect_data or []:
-            classes[x.get("defect_class") or "unknown"] += 1
-            codes[x.get("defect_code") or "미분류"] += 1
-
-    normal = by_final[FinalResult.NORMAL.value]
-    defect = sum(by_final[k] for k in DEFECT_RESULTS)
-    pending = sum(by_final[k] for k in PENDING_RESULTS)
-    return DashboardSummary(
-        date=d.isoformat(), total=len(rows), normal=normal, defect=defect, pending=pending,
-        defect_rate=defect_rate(defect, normal),
-        by_final=by_final,
-        by_stage=[StageCount(stage=k, counts=dict(v)) for k, v in stages.items()],
-        by_product=[ProductSummary(product_name=k, total=sum(v.values()), normal=v["normal"],
-                                   defect=v["defect"], pending=v["pending"]) for k, v in sorted(products.items())],
-        defect_classes=[LabelCount(label=k, count=n) for k, n in classes.most_common()],  # 많은 순
-        defect_codes=[LabelCount(label=k, count=n) for k, n in sorted(codes.items())],
-        recent_defects=[to_summary(r) for r in rows if r.final_result in DEFECT_RESULTS][:recent],
-        active_alarms=active_alarms or 0, alarms_today=alarms_today or 0,
-    )
-
-
 @router.get("/hourly", response_model=list[TrendPoint])
 def hourly(
     d: date | None = Query(None, alias="date"),
     db: Session = Depends(get_db),
     _user: AdminUser = Depends(get_current_user),
 ):
-    """시간대별 검사 수 / 불량 수 (00시~23시, 24칸)"""
     d = d or date.today()
     start, end = date_range(d, d)
     P = ProductInspection
     rows = db.execute(select(P.created_at, P.final_result)
                       .where(P.created_at >= start, P.created_at < end)).all()
-    # 시(hour)별 [전체, 불량] 칸을 만들어 놓고 채운다 (DB 마다 시간 추출 함수가 달라서 파이썬에서 계산)
     buckets = {h: [0, 0] for h in range(24)}
     for ts, res in rows:
         buckets[ts.hour][0] += 1
@@ -116,14 +68,12 @@ def daily(
     db: Session = Depends(get_db),
     _user: AdminUser = Depends(get_current_user),
 ):
-    """일별 검사 수와 불량 수"""
     date_to = date_to or date.today()
-    date_from = date_from or (date_to - timedelta(days=13))  # 기본 14일 (종료일 포함)
+    date_from = date_from or (date_to - timedelta(days=13))
     start, end = date_range(date_from, date_to)
     P = ProductInspection
     rows = db.execute(select(P.created_at, P.final_result)
                       .where(P.created_at >= start, P.created_at < end)).all()
-    # 데이터가 없는 날도 0 으로 나오게 날짜 칸을 먼저 만든다
     days = {(date_from + timedelta(days=i)).isoformat(): [0, 0]
             for i in range((date_to - date_from).days + 1)}
     for ts, res in rows:
@@ -133,3 +83,63 @@ def daily(
             if res in DEFECT_RESULTS:
                 days[k][1] += 1
     return [TrendPoint(label=k, total=t, defect=n) for k, (t, n) in days.items()]
+
+@router.get("/summary", response_model=DashboardSummary)
+def summary(
+    d: date | None = Query(None, alias="date"),
+    recent: int = Query(12, ge=1, le=50),
+    db: Session = Depends(get_db),
+    _user: AdminUser = Depends(get_current_user),
+):
+    d = d or date.today()
+    start, end = date_range(d, d)
+    rows = _rows(db, start, end)
+    A = EquipmentSafetyAlarm
+    active_alarms = db.scalar(select(func.count()).select_from(A).where(A.alarm_status == AlarmStatus.ACTIVE))
+    alarms_today = db.scalar(select(func.count()).select_from(A).where(A.occurred_at >= start, A.occurred_at < end))
+
+    by_final = {f.value: 0 for f in FinalResult}
+    stages = {"DIMENSION": Counter(), "PATCHCORE": Counter(), "YOLO": Counter()}
+    products: dict[str, Counter] = defaultdict(Counter)
+    classes, codes = Counter(), Counter()
+    
+    # 💡 [핵심 통합] 당일 리포트 요약을 축적하기 위한 버퍼 배열 초기화
+    daily_ai_insights = []
+
+    for r in rows:
+        by_final[r.final_result] += 1
+        stages["DIMENSION"][_v(r.dimension_result)] += 1
+        stages["PATCHCORE"][_v(r.patchcore_result)] += 1
+        stages["YOLO"][_v(r.yolo_status)] += 1
+        group = "defect" if r.final_result in DEFECT_RESULTS else "pending" if r.final_result in PENDING_RESULTS else "normal"
+        products[r.product_name][group] += 1
+        
+        # 데이터 정합성을 체크하여 기적재된 Gemma 4 AI 리포트 이력 추출
+        if hasattr(r, 'ai_report') and r.ai_report:
+            daily_ai_insights.append(r.ai_report)
+            
+        for x in r.yolo_defect_data or []:
+            classes[x.get("defect_class") or "unknown"] += 1
+            codes[x.get("defect_code") or "미분류"] += 1
+
+    normal = by_final[FinalResult.NORMAL.value]
+    defect = sum(by_final[k] for k in DEFECT_RESULTS)
+    pending = sum(by_final[k] for k in PENDING_RESULTS)
+    
+    response_data = DashboardSummary(
+        date=d.isoformat(), total=len(rows), normal=normal, defect=defect, pending=pending,
+        defect_rate=defect_rate(defect, normal),
+        by_final=by_final,
+        by_stage=[StageCount(stage=k, counts=dict(v)) for k, v in stages.items()],
+        by_product=[ProductSummary(product_name=k, total=sum(v.values()), normal=v["normal"],
+                                   defect=v["defect"], pending=v["pending"]) for k, v in sorted(products.items())],
+        defect_classes=[LabelCount(label=k, count=n) for k, n in classes.most_common()],
+        defect_codes=[LabelCount(label=k, count=n) for k, n in sorted(codes.items())],
+        recent_defects=[to_summary(r) for r in rows if r.final_result in DEFECT_RESULTS][:recent],
+        active_alarms=active_alarms or 0, alarms_today=alarms_today or 0,
+    )
+    
+    # 💡 React 프론트엔드 메인 종합 보드 스키마 확장을 위한 동적 컴포넌트 데이터 바인딩
+    response_data.__dict__["daily_ai_reports"] = daily_ai_insights[:5]
+    
+    return response_data
