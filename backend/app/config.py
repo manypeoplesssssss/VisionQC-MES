@@ -50,8 +50,8 @@ class Settings(BaseSettings):
     # 불량 코드를 지정하면 로컬 Ollama 가 조치 요약을 써 준다. 비우면 AI 를 안 부르고 불량 종류 표 내용으로만 요약한다.
     # Ollama 가 꺼져 있거나 실패해도 검사·MES 기능에는 영향이 없다 (응답을 보낸 뒤 백그라운드로 호출)
     OLLAMA_URL: str = "http://localhost:11434"
-    OLLAMA_MODEL: str = "gemma4"
-    OLLAMA_TIMEOUT_S: int = 30
+    OLLAMA_MODEL: str = "gemma4:e2b"   # ollama pull gemma4:e2b (약 3.5GB, 작은 모델)
+    OLLAMA_TIMEOUT_S: int = 180   # 처음 한 번은 모델을 메모리에 올리느라 오래 걸린다 (CPU 만 있는 PC 는 1~2분). 백그라운드라 화면은 안 막힘
 
     # ---------- 3D 치수 기준 ----------
     # 제품 모델별 기준 치수 [가로, 길이, 높이] (mm). 검사 PC 가 기준값을 안 보내면 이 값을 쓴다.
