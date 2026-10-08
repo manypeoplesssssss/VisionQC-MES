@@ -151,6 +151,7 @@ erDiagram
         json image_files "사진별 경로 배열"
         varchar final_result "[자동] 최종 결과"
         text recommended_action "원인 후보 및 권장 조치"
+        text ai_report "AI 조치 요약 (불량 코드 지정 시 생성)"
         varchar report_path
         datetime report_sent_at
         datetime created_at
@@ -257,6 +258,7 @@ storage/images/2026-10-06/2026-10-06-redcar-143005-YOLO-20261006_inspection_1430
 | 날짜 귀속 | 검사 시작 시각(`created_at`) 기준 |
 | 장비 안전 | 검사 허용은 **센터링 OFF(정위치) AND 인터락 0(정상)** 일 때만. ON / 1 / UNKNOWN(미확인·센서 응답 끊김)이면 검사 프로그램이 시작하지 않거나 장비를 멈추고 검사를 보류하며, MES 에 알람을 남김. 알람 해제만으로 자동 재시작하지 않음. 검사 테이블 2개의 `centering_state`(OFF/ON/UNKNOWN), `interlock_state`(0/1/UNKNOWN)에 마지막 확인 값 기록. 이상이면 조건마다 알람 1행 (같은 검사·단계·상태의 발생 중 알람이 있으면 중복 안 만듦). 코드: `services/safety.py` |
 | 권장 조치 | 결함에 지정된 불량 코드들의 `[코드 이름] 원인 후보: … / 권장 조치: …` 를 모아 `recommended_action` 에 저장 |
+| AI 조치 요약 | 불량 코드를 지정하면 불량 종류 표 내용으로 만든 기본 요약을 `ai_report` 에 **바로** 저장하고, 응답을 보낸 뒤 로컬 Ollama(`OLLAMA_URL`, 기본 `http://localhost:11434`, 모델 `gemma4`)가 켜져 있으면 AI 요약으로 바꾼다. 꺼져 있거나 실패하면 기본 요약이 그대로 남고 검사·MES 기능에는 영향이 없다. `OLLAMA_URL` 을 비우면 AI 를 아예 안 부른다. 코드: `services/ai_report.py` |
 
 PatchCore 가 불합격이면 YOLO 가 불량 유형을 분류하지 못하더라도 정상으로 바꾸지 않습니다 (`YOLO_PENDING` / `PROCESS_DEFECT`).
 
@@ -361,6 +363,10 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
   "recent_defects": [ 검사 목록 한 줄, ... ]
 }
 ```
+**GET /api/dashboard/report?date=2026-10-08** — 일일 보고서 (화면 [일일 보고서])
+`{ date, daily, weekly, monthly: { label, date_from, date_to, total, normal, defect, pending, yield_pct, defect_rate }, defects: [{ defect_code, defect_name, count, inspections, classes, cause_candidates, recommended_action }], ai_reports: [{ inspection_id, product_name, defect_codes, text, created_at }] }`
+주간은 기준일 포함 7일, 월간은 30일. 수율 = 정상 ÷ (정상 + 불량), 판정 전 검사는 뺀다. 불량 분석의 원인·조치는 불량 종류 표의 내용이고, 코드를 지정하지 않은 결함은 `미분류`.
+
 **GET /api/dashboard/hourly?date=** → `[{ "label": "00", "total": 0, "defect": 0 }, ... 24개]`
 
 **GET /api/dashboard/daily?date_from=&date_to=** → `[{ "label": "2026-09-23", "total": 30, "defect": 3 }, ...]` (기본 14일)

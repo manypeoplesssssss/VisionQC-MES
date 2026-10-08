@@ -223,6 +223,7 @@ class ProductInspection(Base):
     final_result: Mapped[str] = mapped_column(
         String(32), Computed(_FINAL_RESULT_SQL, persisted=True), index=True)        # [자동] 최종 검사 결과
     recommended_action: Mapped[Optional[str]] = mapped_column(Text, nullable=True)   # 원인 후보 및 권장 조치
+    ai_report: Mapped[Optional[str]] = mapped_column(Text, nullable=True)            # AI 조치 요약 (불량 코드를 지정하면 생성)
     report_path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)   # 생성한 리포트 파일 경로
     report_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)  # 리포트 발송 성공 시각
 

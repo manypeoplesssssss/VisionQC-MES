@@ -202,6 +202,7 @@ class InspectionDetailOut(InspectionSummaryOut):
     yolo_model_version: str | None = None
     capture_folder: str | None = None
     recommended_action: str | None = None
+    ai_report: str | None = None      # AI 조치 요약 (불량 코드를 지정하면 생성)
     report_path: str | None = None
     report_sent_at: datetime | None = None
     updated_at: datetime | None = None
@@ -301,6 +302,15 @@ class LabelCount(BaseModel):
     count: int
 
 
+class AiReportItem(BaseModel):
+    """AI 조치 요약 1건 (대시보드·보고서용)"""
+    inspection_id: str
+    product_name: str
+    defect_codes: list[str]
+    text: str
+    created_at: datetime
+
+
 class DashboardSummary(BaseModel):
     date: str
     total: int                       # 그날 검사 수
@@ -316,6 +326,7 @@ class DashboardSummary(BaseModel):
     recent_defects: list[InspectionSummaryOut]
     active_alarms: int = 0                 # 지금 발생 중(해제 안 된) 안전 알람 수 (날짜와 무관)
     alarms_today: int = 0                  # 그날 발생한 안전 알람 수
+    daily_ai_reports: list[AiReportItem] = []   # 그날 지정된 불량의 AI 조치 요약 (최근 5건)
 
 
 class TrendPoint(BaseModel):
@@ -323,6 +334,39 @@ class TrendPoint(BaseModel):
     label: str
     total: int
     defect: int
+
+
+class PeriodStat(BaseModel):
+    """보고서의 한 기간 (일간 / 주간 7일 / 월간 30일) 집계"""
+    label: str                       # 일간 · 주간(7일) · 월간(30일)
+    date_from: str
+    date_to: str
+    total: int                       # 검사 수
+    normal: int                      # 정상
+    defect: int                      # 불량 (치수 불합격 + 공정 불량)
+    pending: int                     # 판정 전
+    yield_pct: float                 # 수율(%) = 정상 / (정상 + 불량). 판정 전은 뺀다
+    defect_rate: float               # 불량률(%) = 불량 / (정상 + 불량)
+
+
+class DefectAnalysis(BaseModel):
+    """그날 검출된 결함을 불량 코드별로 모은 것 (원인 후보·권장 조치는 불량 종류 표의 내용)"""
+    defect_code: str                 # D01~D05, 지정 안 했으면 '미분류'
+    defect_name: str | None = None
+    count: int                       # 결함 개수
+    inspections: int                 # 해당 결함이 있는 검사 수
+    classes: list[str] = []          # YOLO 결함 종류 (scratch, white_paint ...)
+    cause_candidates: list[str] = []
+    recommended_action: str | None = None
+
+
+class ReportOut(BaseModel):
+    date: str
+    daily: PeriodStat
+    weekly: PeriodStat
+    monthly: PeriodStat
+    defects: list[DefectAnalysis] = []
+    ai_reports: list[AiReportItem] = []
 
 
 InspectionDetailOut.model_rebuild()

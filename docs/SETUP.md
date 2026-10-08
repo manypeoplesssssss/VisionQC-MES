@@ -399,6 +399,13 @@ db.check_safety("YOLO", centering, interlock, inspection_id=iid)   # 상태 기�
 | `YOLO_PENDING` | PatchCore 불합격, YOLO 분류 대기 (사진이 들어오는 중이어도 완료 전이면 여기) |
 | `PROCESS_DEFECT` | PatchCore 불합격, YOLO 분류 완료 |
 
+### 이미 만들어 둔 DB 에 컬럼 추가 (2026-10-08, AI 조치 요약)
+`product_inspection` 에 `ai_report` 컬럼이 새로 생겼습니다. 이미 쓰고 있는 DB 는 한 번만 실행합니다 (새로 만드는 DB 는 `sql/schema.sql` 에 들어 있음).
+```sql
+ALTER TABLE product_inspection ADD COLUMN ai_report TEXT NULL AFTER recommended_action;
+```
+AI 요약을 로컬 Ollama 로 쓰려면 `backend\.env` 에 `OLLAMA_URL`, `OLLAMA_MODEL` 을 적습니다 (안 적으면 기본값, 꺼져 있어도 기본 요약으로 동작).
+
 ### 7-5. 지켜야 할 값 규칙
 | 값 | 규칙 | 예 |
 |---|---|---|

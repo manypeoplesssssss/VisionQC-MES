@@ -51,6 +51,7 @@ CREATE TABLE IF NOT EXISTS product_inspection (
             ELSE 'YOLO_PENDING'
         END) STORED NOT NULL,
     recommended_action      TEXT         NULL,                                  -- 원인 후보 및 권장 조치 (지정된 불량 코드에서 모음)
+    ai_report               TEXT         NULL,                                  -- AI 조치 요약 (불량 코드를 지정하면 생성, services/ai_report.py)
     report_path             VARCHAR(500) NULL,                                  -- 생성한 리포트 파일 경로
     report_sent_at          DATETIME     NULL,                                  -- 리포트 발송 성공 시각
     created_at              DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,    -- 검사 행 생성 시각 (검사 시작 시각)

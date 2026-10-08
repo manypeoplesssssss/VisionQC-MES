@@ -46,6 +46,13 @@ class Settings(BaseSettings):
     # 프론트엔드 주소 (CORS). 브라우저가 다른 주소에서 API를 부를 때 허용할 목록. 여러 개면 쉼표로 구분
     CORS_ORIGINS: str = "http://localhost:5173"
 
+    # ---------- AI 조치 요약 (선택) ----------
+    # 불량 코드를 지정하면 로컬 Ollama 가 조치 요약을 써 준다. 비우면 AI 를 안 부르고 불량 종류 표 내용으로만 요약한다.
+    # Ollama 가 꺼져 있거나 실패해도 검사·MES 기능에는 영향이 없다 (응답을 보낸 뒤 백그라운드로 호출)
+    OLLAMA_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "gemma4"
+    OLLAMA_TIMEOUT_S: int = 30
+
     # ---------- 3D 치수 기준 ----------
     # 제품 모델별 기준 치수 [가로, 길이, 높이] (mm). 검사 PC 가 기준값을 안 보내면 이 값을 쓴다.
     # 검사할 때마다 그 당시 값이 product_dimension_inspection 행에 복사되므로, 바꿔도 지난 검사는 그대로.

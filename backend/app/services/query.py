@@ -133,6 +133,7 @@ def to_detail(insp: ProductInspection, db: Session) -> InspectionDetailOut:
         yolo_model_version=insp.yolo_model_version,
         capture_folder=insp.capture_folder,
         recommended_action=insp.recommended_action,
+        ai_report=insp.ai_report,
         report_path=insp.report_path,
         report_sent_at=insp.report_sent_at,
         updated_at=insp.updated_at,

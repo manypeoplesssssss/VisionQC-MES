@@ -24,6 +24,7 @@ os.environ["DATABASE_URL"] = f"sqlite:///{_tmp / 'test.db'}"
 os.environ["STORAGE_DIR"] = str(_tmp / "images")
 os.environ["INGEST_API_KEY"] = "test-key"
 os.environ["JWT_SECRET"] = "test-secret"
+os.environ["OLLAMA_URL"] = ""      # 테스트는 AI(Ollama)를 부르지 않는다 (필요한 테스트는 ask_ollama 를 가짜로 바꿈)
 os.environ["PRODUCT_STANDARDS"] = '{"redcar": [194.5, 84.96, 58.68]}'
 # backend 폴더를 import 경로에 추가 (어디서 pytest 를 실행해도 app 패키지를 찾게)
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

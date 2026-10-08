@@ -3,6 +3,7 @@
  *
  *   /login                    로그인
  *   /                         대시보드
+ *   /report                   일일 보고서 (일간·주간·월간 집계, 불량 분석, AI 조치 요약)
  *   /inspections              검사 조회 (검사 1회 = 한 줄)
  *   /inspections/:id          검사 상세 (치수 · PatchCore · YOLO 사진 · 불량 코드 지정)
  *   /defect-types             불량 종류 D01~D05
@@ -17,6 +18,7 @@ import { useAuth } from "./context/AuthContext.jsx";
 import Layout from "./components/Layout.jsx";
 import Login from "./pages/Login.jsx";
 import Dashboard from "./pages/Dashboard.jsx";
+import Report from "./pages/Report.jsx";
 import Inspections from "./pages/Inspections.jsx";
 import InspectionDetail from "./pages/InspectionDetail.jsx";
 import DefectTypes from "./pages/DefectTypes.jsx";
@@ -50,6 +52,7 @@ export default function App() {
         }
       >
         <Route path="/" element={<Dashboard />} />
+        <Route path="/report" element={<Report />} />
         <Route path="/inspections" element={<Inspections />} />
         <Route path="/inspections/:id" element={<InspectionDetail />} />
         <Route path="/defect-types" element={<DefectTypes />} />

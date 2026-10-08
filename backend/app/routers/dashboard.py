@@ -5,6 +5,7 @@ GET /api/dashboard/summary?date=YYYY-MM-DD      그날 검사 수·정상·불�
                                                  제품 모델별, YOLO 결함 종류, 불량 코드, 최근 불량
 GET /api/dashboard/hourly?date=YYYY-MM-DD       시간대별 검사·불량 수 (하루)
 GET /api/dashboard/daily?date_from=&date_to=    일별 검사·불량 수 (기간, 기본 최근 14일)
+GET /api/dashboard/report?date=YYYY-MM-DD       일일 보고서: 일간·주간(7일)·월간(30일) 집계, 그날 불량 분석, AI 조치 요약
 
 검사 1회 = product_inspection 1행. 시각은 created_at(검사 시작 시각) 기준.
 불량 = 치수 불합격(DIMENSION_DEFECT) + PatchCore 불합격(YOLO_PENDING, PROCESS_DEFECT)
@@ -18,9 +19,11 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import AdminUser, AlarmStatus, EquipmentSafetyAlarm, FinalResult, ProductInspection
-from ..schemas import DashboardSummary, LabelCount, ProductSummary, StageCount, TrendPoint
+from ..models import AdminUser, AlarmStatus, DefectType, EquipmentSafetyAlarm, FinalResult, ProductInspection
+from ..schemas import (AiReportItem, DashboardSummary, DefectAnalysis, LabelCount, PeriodStat, ProductSummary,
+                       ReportOut, StageCount, TrendPoint)
 from ..security import get_current_user
+from ..services.ai_report import assigned_codes
 from ..services.query import DEFECT_RESULTS, PENDING_RESULTS, date_range, to_summary
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -40,6 +43,13 @@ def defect_rate(defect: int, normal: int) -> float:
 
 def _v(x) -> str:
     return getattr(x, "value", x)
+
+
+def _ai_items(rows: list[ProductInspection], limit: int = 5) -> list[AiReportItem]:
+    """AI 조치 요약이 있는 검사 중 최근 것부터 (rows 는 최신순)"""
+    return [AiReportItem(inspection_id=r.inspection_id, product_name=r.product_name,
+                         defect_codes=assigned_codes(r), text=r.ai_report, created_at=r.created_at)
+            for r in rows if r.ai_report][:limit]
 
 
 @router.get("/summary", response_model=DashboardSummary)
@@ -85,6 +95,7 @@ def summary(
         defect_codes=[LabelCount(label=k, count=n) for k, n in sorted(codes.items())],
         recent_defects=[to_summary(r) for r in rows if r.final_result in DEFECT_RESULTS][:recent],
         active_alarms=active_alarms or 0, alarms_today=alarms_today or 0,
+        daily_ai_reports=_ai_items(rows),
     )
 
 
@@ -133,3 +144,61 @@ def daily(
             if res in DEFECT_RESULTS:
                 days[k][1] += 1
     return [TrendPoint(label=k, total=t, defect=n) for k, (t, n) in days.items()]
+
+
+# -------------------------------------------------------------------------
+# 일일 보고서 (일간 · 주간 7일 · 월간 30일 + 그날 불량 분석 + AI 조치 요약)
+# -------------------------------------------------------------------------
+def _period(db: Session, label: str, d_from: date, d_to: date) -> PeriodStat:
+    """기간 안의 검사를 최종 결과별로 세어 정상·불량·판정 전·수율을 계산한다 (수율은 판정 끝난 검사 기준)"""
+    P = ProductInspection
+    start, end = date_range(d_from, d_to)
+    counts = {_v(k): n for k, n in db.execute(
+        select(P.final_result, func.count()).where(P.created_at >= start, P.created_at < end).group_by(P.final_result)).all()}
+    normal = counts.get(FinalResult.NORMAL.value, 0)
+    defect = sum(counts.get(k, 0) for k in DEFECT_RESULTS)
+    pending = sum(counts.get(k, 0) for k in PENDING_RESULTS)
+    done = normal + defect
+    return PeriodStat(label=label, date_from=d_from.isoformat(), date_to=d_to.isoformat(),
+                      total=sum(counts.values()), normal=normal, defect=defect, pending=pending,
+                      yield_pct=round(normal / done * 100, 2) if done else 0.0, defect_rate=defect_rate(defect, normal))
+
+
+def _defect_analysis(db: Session, rows: list[ProductInspection]) -> list[DefectAnalysis]:
+    """그날 검출된 결함을 불량 코드별로 모은다. 원인 후보·권장 조치는 불량 종류 표(defect_type)에 적힌 내용 그대로"""
+    groups: dict[str, dict] = {}
+    for r in rows:
+        for x in r.yolo_defect_data or []:
+            g = groups.setdefault(x.get("defect_code") or "미분류", {"count": 0, "inspections": set(), "classes": set()})
+            g["count"] += 1
+            g["inspections"].add(r.inspection_id)
+            if x.get("defect_class"):
+                g["classes"].add(x["defect_class"])
+    types = {t.defect_code: t for t in db.scalars(select(DefectType).where(DefectType.defect_code.in_(list(groups))))} if groups else {}
+    out = []
+    for code in sorted(groups, key=lambda c: (c == "미분류", c)):   # D01.. 순서, 미분류는 마지막
+        g, t = groups[code], types.get(code)
+        out.append(DefectAnalysis(defect_code=code, defect_name=t.defect_name if t else None, count=g["count"],
+                                  inspections=len(g["inspections"]), classes=sorted(g["classes"]),
+                                  cause_candidates=list(t.cause_candidates or []) if t else [],
+                                  recommended_action=t.recommended_action if t else None))
+    return out
+
+
+@router.get("/report", response_model=ReportOut)
+def report(
+    d: date | None = Query(None, alias="date"),
+    db: Session = Depends(get_db),
+    _user: AdminUser = Depends(get_current_user),
+):
+    d = d or date.today()
+    start, end = date_range(d, d)
+    rows = _rows(db, start, end)
+    return ReportOut(
+        date=d.isoformat(),
+        daily=_period(db, "일간", d, d),
+        weekly=_period(db, "주간 (7일)", d - timedelta(days=6), d),
+        monthly=_period(db, "월간 (30일)", d - timedelta(days=29), d),
+        defects=_defect_analysis(db, rows),
+        ai_reports=_ai_items(rows),
+    )

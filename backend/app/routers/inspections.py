@@ -16,10 +16,8 @@ GET    /api/products                                      검사에 등장한 �
 import csv
 import io
 from datetime import date, datetime
-import urllib.request
-import json
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -30,15 +28,19 @@ from ..schemas import DefectCodeIn, InspectionDetailOut, InspectionPage
 from ..security import get_current_user, require_admin
 from ..services.query import (apply_filters, date_range, get_or_404, refresh_recommended, to_detail,
                               to_summary)
+from ..services.ai_report import set_auto_report, upgrade_with_ai
 from ..storage import delete_image
 
 router = APIRouter(prefix="/api", tags=["inspections"])
 
+# CSV 한 번에 내보낼 최대 행 수 (서버 메모리 보호)
 EXPORT_LIMIT = 100_000
 
 
 def _filters(product_name: str | None = None, final_result: str | None = None,
              serial: str | None = None, date_from: date | None = None, date_to: date | None = None):
+    """목록/CSV 공통 필터. 기간을 안 주면 전체 기간.
+    final_result 는 6가지 값 외에 DEFECT(불량 전체), PENDING(판정 전 전체)도 받는다"""
     start = end = None
     if date_from or date_to:
         start, end = date_range(date_from, date_to)
@@ -57,7 +59,7 @@ def list_inspections(
     _user: AdminUser = Depends(get_current_user),
 ):
     q = apply_filters(select(ProductInspection), **f)
-    total = db.scalar(select(func.count()).select_from(q.subquery()))
+    total = db.scalar(select(func.count()).select_from(q.subquery()))  # 전체 건수 (페이지 수 계산용)
     rows = db.scalars(
         q.order_by(ProductInspection.created_at.desc(), ProductInspection.id.desc())
          .offset((page - 1) * size).limit(size)
@@ -80,9 +82,10 @@ def export_inspections(
               "final_result", "capture_count"]
 
     def generate():
+        """CSV 를 조금씩 만들어서 흘려보냄 (큰 파일도 메모리에 한 번에 올리지 않게)"""
         buf = io.StringIO()
         w = csv.writer(buf)
-        buf.write("\ufeff")
+        buf.write("﻿")  # 엑셀에서 한글 안 깨지게 BOM
         w.writerow(header)
         for r in rows:
             d = r.dimension
@@ -93,12 +96,12 @@ def export_inspections(
                 _v(r.patchcore_result), r.patchcore_score if r.patchcore_score is not None else "",
                 r.patchcore_threshold if r.patchcore_threshold is not None else "",
                 _v(r.yolo_status), len(defects),
-                ";".join(sorted({x.get("defect_class") or "" for x in defects})),
+                ";".join(sorted({x.get("defect_class") or "" for x in defects})),   # 여러 개는 ; 로
                 ";".join(sorted({x["defect_code"] for x in defects if x.get("defect_code")})),
                 max((x.get("confidence") or 0) for x in defects) if defects else "",
                 r.final_result, len(r.image_files or []),
             ])
-            if buf.tell() > 64_000:
+            if buf.tell() > 64_000:  # 64KB 쌓이면 내보내고 비우기
                 yield buf.getvalue()
                 buf.seek(0)
                 buf.truncate()
@@ -110,7 +113,9 @@ def export_inspections(
 
 
 def _v(x) -> str:
+    """Enum 이면 값, 아니면 그대로 (CSV 용)"""
     return getattr(x, "value", x) or ""
+
 
 @router.get("/inspections/{inspection_id}", response_model=InspectionDetailOut)
 def get_inspection(inspection_id: str, db: Session = Depends(get_db),
@@ -119,10 +124,10 @@ def get_inspection(inspection_id: str, db: Session = Depends(get_db),
 
 
 # -------------------------------------------------------------------------
-# 불량 코드 지정 (관리자) - 💡 [유저 담당 파트] Gemma 4 실시간 원격 바인딩 엔진 이관 완료
+# 불량 코드 지정 (관리자) - YOLO 검출만으로는 D01~D05 공정 케이스가 자동 분류되지 않아 사람이 확인해 지정
 # -------------------------------------------------------------------------
 @router.put("/inspections/{inspection_id}/defects/{index}", response_model=InspectionDetailOut)
-def set_defect_code(inspection_id: str, index: int, body: DefectCodeIn,
+def set_defect_code(inspection_id: str, index: int, body: DefectCodeIn, background: BackgroundTasks,
                     db: Session = Depends(get_db), _admin: AdminUser = Depends(require_admin)):
     insp = get_or_404(db, inspection_id)
     defects = [dict(d) for d in (insp.yolo_defect_data or [])]
@@ -133,47 +138,13 @@ def set_defect_code(inspection_id: str, index: int, body: DefectCodeIn,
         if t is None or not t.is_active:
             raise HTTPException(400, "사용할 수 없는 불량 코드입니다")
     defects[index]["defect_code"] = body.defect_code
-    insp.yolo_defect_data = defects        
-    
-    refresh_recommended(insp, db)          
-
-    # 🤖 [Gemma 4 AI XAI Core Module] 통신 처리부
-    try:
-        defect_knowledge = {
-            "D01": {"name": "측면 도장 부족", "cause": "페인트 공급 부족, 노즐 막힘, 측면 분사 위치 오류", "action": "페인트 공급 상태, 노즐, 측면 분사 위치 확인"},
-            "D02": {"name": "정면 도장 부족", "cause": "페인트 공급 부족, 노즐 막힘, 분사 위치 오류", "action": "페인트 공급 상태, 노즐, 정면 분사 위치 확인"},
-            "D03": {"name": "상단(천장) 도장 부족", "cause": "페인트 공급 부족, 노즐 막힘, 분사 위치 오류", "action": "페인트 공급 상태, 노즐, 상단 분사 위치 확인"},
-            "D04": {"name": "지구 조립 불완전으로 인한 스크래치", "cause": "지구 부품 조립 불완전", "action": "지구 조립·고정 상태와 작동 중 제품 접촉 확인"},
-            "D05": {"name": "턴테이블 안착 중 발생한 스크래치", "cause": "안착 과정에서 발생한 접촉", "action": "제품 안착 과정과 턴테이블 접촉 부위 확인"}
-        }
-        
-        target_info = defect_knowledge.get(body.defect_code, {"name": "미분류 결함", "cause": "공정 데이터 분석 요망", "action": "설비 가이드 전수 정비"})
-        ollama_url = "http://localhost:11434/api/generate"
-        
-        prompt_text = f"""
-        [스마트팩토리 비전 QC 품질관리부 일일 종합 진단 지시서]
-        - 검사 대상 제품군: {insp.product_name}
-        - 작업자 지정 결함 코드: {body.defect_code} ({target_info['name']})
-        - 현장 하드웨어 원인 후보: {target_info['cause']}
-        - 시스템 표준 재발방지 권장조치: {target_info['action']}
-        
-        위 실측 설비 데이터를 바탕으로 공정 운영 엔지니어가 메인 대시보드에서 즉각 참고할 수 있는 '품질 개선 조치 지시서 요약본'을 3줄 이내의 전문적인 자동차 제조 공정 기술 용어를 사용하여 간결하게 작성해 주십시오.
-        """
-        
-        req_data = json.dumps({"model": "gemma4", "prompt": prompt_text, "stream": False}).encode('utf-8')
-        req = urllib.request.Request(ollama_url, data=req_data, headers={'Content-Type': 'application/json'})
-        
-        with urllib.request.urlopen(req, timeout=3.0) as response:
-            res_body = json.loads(response.read().decode('utf-8'))
-            ai_generated_report = res_body.get('response', '').strip()
-            # 생성 문구를 DB 스키마 속성에 파싱하여 전달
-            insp.ai_report = f"[Gemma 4 Edge-AI Local Tensor Report]\n{ai_generated_report}"
-    except Exception:
-        # 안전한 시스템 폴백 가이드 라인 셋업
-        insp.ai_report = f"[Gemma 4 AI 통합 연동 완료]\n결함 코드 {body.defect_code} 감지에 따른 긴급 조치 지시: {target_info['action']} 상태를 정밀 정비하십시오."
-
+    insp.yolo_defect_data = defects        # 새 리스트를 넣어야 JSON 변경이 저장된다
+    refresh_recommended(insp, db)          # 원인 후보·권장 조치 다시 모으기
+    set_auto_report(insp, db)              # AI 조치 요약: 일단 불량 종류 표 내용으로 바로 저장 (기다림 없음)
     db.commit()
     db.refresh(insp)
+    if body.defect_code:                   # 응답을 보낸 뒤 Ollama 요약으로 바꿔 본다 (꺼져 있으면 기본 요약 그대로)
+        background.add_task(upgrade_with_ai, inspection_id)
     return to_detail(insp, db)
 
 
@@ -186,16 +157,17 @@ def delete_inspection(inspection_id: str, db: Session = Depends(get_db),
     insp = get_or_404(db, inspection_id)
     paths = [p for f in (insp.image_files or [])
              for p in (f.get("original_path"), f.get("annotated_path"), f.get("metadata_path")) if p]
-    for alarm in insp.alarms:  
+    for alarm in insp.alarms:  # 알람 이력은 남기고 검사번호 연결만 끊는다
         alarm.inspection_id = None
     db.flush()
-    db.delete(insp)       
+    db.delete(insp)       # 치수 행은 cascade 로 같이 삭제
     db.commit()
-    for p in paths:       
+    for p in paths:       # DB 삭제가 끝난 뒤 파일 삭제
         delete_image(p)
 
 
 @router.get("/products", response_model=list[str])
 def list_products(db: Session = Depends(get_db), _user: AdminUser = Depends(get_current_user)):
+    """검사 데이터에 등장한 제품 모델명 (화면의 선택 상자용)"""
     return db.scalars(select(ProductInspection.product_name).distinct()
                       .order_by(ProductInspection.product_name)).all()

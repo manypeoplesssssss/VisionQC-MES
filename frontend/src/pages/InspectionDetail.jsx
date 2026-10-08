@@ -236,6 +236,12 @@ export default function InspectionDetail() {
         ) : (
           <p className="muted small">불량 코드를 지정하면 그 코드의 원인 후보와 권장 조치가 여기에 모입니다. (원인은 확정이 아닌 후보)</p>
         )}
+        {insp.ai_report && (
+          <>
+            <h4 style={{ marginBottom: 4 }}>AI 조치 요약</h4>
+            <pre className="advice">{insp.ai_report}</pre>
+          </>
+        )}
         <p className="muted small">리포트: {insp.report_path || "생성 전"}{insp.report_sent_at && ` · 발송 ${fmtTime(insp.report_sent_at)}`}</p>
       </section>
 
