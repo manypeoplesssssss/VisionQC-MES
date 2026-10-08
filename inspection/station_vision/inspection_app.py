@@ -946,6 +946,7 @@ class Engine(threading.Thread):
         verdict = "FAIL" if captures or getattr(self, "pc_failed", False) else "PASS"
         self._log(f"한 바퀴 검사 완료: {verdict} / 촬영 {captures}회")
         self._state(status="완료", verdict=verdict, yolo_ready=not self.gate_3d)  # 다음 제품은 3D 부터
+        self.placement_state = "UNKNOWN"  # 다음 물체는 올린 뒤 놓임을 다시 확인
         self._submit("complete_yolo")
 
     def _submit_safety(self, stage, centering, interlock, inspection_id=None, message=None):
@@ -1084,7 +1085,8 @@ class Engine(threading.Thread):
                 if self._has_sensors(table):
                     if getattr(table, "aligning", False):
                         table.set_alignment(False)  # 정렬용 레이저는 검사 전에 끈다
-                    self._check_placement(table)  # 센서 장비: 시작할 때마다 물체 놓임을 레이저로 확인
+                    if self.placement_state != "OFF":  # 센터링은 물체를 올린 뒤 처음 한 번만 확인 (3D 스캔 때 했으면 그 결과를 이어받음)
+                        self._check_placement(table)
                 centering, interlock = self._safety_now(table)
                 if not safety_ok(centering, interlock):
                     self._log(f"검사 금지: 센터링 {CENTERING_KO.get(centering, centering)} / "
@@ -1114,11 +1116,13 @@ class Engine(threading.Thread):
                     if score < pc.threshold:
                         self._log(f"PatchCore 합격 (최고 점수 {score:.3f} < 기준 {pc.threshold:.3f}) → YOLO 생략, 검사 완료")
                         self._state(status="완료", verdict="PASS", angle=0.0, yolo_ready=not self.gate_3d)
+                        self.placement_state = "UNKNOWN"  # 다음 물체는 올린 뒤 놓임을 다시 확인
                         continue
                     self.pc_failed = True
                     if self.patchcore_only:
                         self._log(f"PatchCore 불합격 (최고 점수 {score:.3f} ≥ 기준 {pc.threshold:.3f}) → PatchCore 전용 모드라 YOLO 는 하지 않음")
                         self._state(status="완료", verdict="FAIL", angle=0.0, yolo_ready=not self.gate_3d)
+                        self.placement_state = "UNKNOWN"  # 다음 물체는 올린 뒤 놓임을 다시 확인
                         continue
                     self._log(f"PatchCore 불합격 (최고 점수 {score:.3f} ≥ 기준 {pc.threshold:.3f}) → YOLO 로 결함 확인")
                     self._state(verdict="PatchCore 불합격")
