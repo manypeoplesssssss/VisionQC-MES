@@ -1284,7 +1284,7 @@ class App:
         safe.pack(fill="x", pady=(8, 0))
         self.safety_vars = {}
         self.safety_boxes = {}
-        default = ("OFF", "0") if self.sim else ("UNKNOWN", "UNKNOWN")  # 시뮬레이션은 정상으로 시작
+        default = ("OFF", "0") if self.sim else ("OFF", "UNKNOWN")  # 센터링은 정위치(OFF)로 시작 (작업자가 바꿀 수 있음). 인터락은 센서(없으면 작업자)가 정함, 시뮬레이션은 정상으로 시작
         for label, key, choices, value in (
                 ("센터링", "centering", [("UNKNOWN", "미확인"), ("OFF", "OFF 정위치"), ("ON", "ON 위치 이상")], default[0]),
                 ("인터락", "interlock", [("UNKNOWN", "미확인"), ("0", "0 정상"), ("1", "1 비정상")], default[1])):
