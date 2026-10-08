@@ -5,7 +5,7 @@ GET /api/dashboard/summary?date=YYYY-MM-DD      그날 검사 수·정상·불�
                                                  제품 모델별, YOLO 결함 종류, 불량 코드, 최근 불량
 GET /api/dashboard/hourly?date=YYYY-MM-DD       시간대별 검사·불량 수 (하루)
 GET /api/dashboard/daily?date_from=&date_to=    일별 검사·불량 수 (기간, 기본 최근 14일)
-GET /api/dashboard/report?date=YYYY-MM-DD       일일 보고서: 일간·주간(7일)·월간(30일) 집계, 그날 불량 분석, AI 조치 요약
+GET /api/dashboard/report?period=day|week|month&date=YYYY-MM-DD   보고서: 기간 집계(앞 기간과 비교), 하루씩 추이, 불량 분석, AI 조치 요약
 
 검사 1회 = product_inspection 1행. 시각은 created_at(검사 시작 시각) 기준.
 불량 = 치수 불합격(DIMENSION_DEFECT) + PatchCore 불합격(YOLO_PENDING, PROCESS_DEFECT)
@@ -20,8 +20,8 @@ from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import AdminUser, AlarmStatus, DefectType, EquipmentSafetyAlarm, FinalResult, ProductInspection
-from ..schemas import (AiReportItem, DashboardSummary, DefectAnalysis, LabelCount, PeriodStat, ProductSummary,
-                       ReportOut, StageCount, TrendPoint)
+from ..schemas import (AiReportItem, DashboardSummary, DayPoint, DefectAnalysis, LabelCount, PeriodStat,
+                       ProductSummary, ReportOut, StageCount, TrendPoint)
 from ..security import get_current_user
 from ..services.ai_report import assigned_codes
 from ..services.query import DEFECT_RESULTS, PENDING_RESULTS, date_range, to_summary
@@ -185,20 +185,63 @@ def _defect_analysis(db: Session, rows: list[ProductInspection]) -> list[DefectA
     return out
 
 
+_WEEKDAY = "월화수목금토일"
+
+
+def _bounds(period: str, d: date) -> tuple[date, date, date, date, str]:
+    """보고서 기간과 바로 앞 기간 (시작, 끝, 앞 시작, 앞 끝, 제목)"""
+    if period == "week":
+        start = d - timedelta(days=d.weekday())            # 그 주 월요일
+        end = start + timedelta(days=6)
+        return start, end, start - timedelta(days=7), start - timedelta(days=1), f"{start} ~ {end} 주간"
+    if period == "month":
+        start = d.replace(day=1)
+        end = (start + timedelta(days=32)).replace(day=1) - timedelta(days=1)
+        prev_end = start - timedelta(days=1)
+        return start, end, prev_end.replace(day=1), prev_end, f"{start:%Y-%m} 월간"
+    return d, d, d - timedelta(days=1), d - timedelta(days=1), f"{d} ({_WEEKDAY[d.weekday()]}) 일일"
+
+
+def _report_rows(db: Session, start, end):
+    """보고서에 필요한 열만 읽는다 (월간은 수천 건이라 사진 목록 같은 큰 열은 안 읽음). 최신순"""
+    P = ProductInspection
+    return db.execute(select(P.inspection_id, P.product_name, P.created_at, P.final_result, P.yolo_defect_data, P.ai_report)
+                      .where(P.created_at >= start, P.created_at < end)
+                      .order_by(P.created_at.desc(), P.id.desc())).all()
+
+
+def _day_points(rows, d_from: date, d_to: date) -> list[DayPoint]:
+    """하루씩 정상·불량·판정 전을 센다. 데이터가 없는 날도 0 으로 나오고, 오늘 이후 날짜는 뺀다"""
+    last = min(d_to, date.today())
+    days = {(d_from + timedelta(days=i)).isoformat(): Counter() for i in range((last - d_from).days + 1)}
+    for r in rows:
+        c = days.get(r.created_at.date().isoformat())
+        if c is None:
+            continue
+        group = "defect" if r.final_result in DEFECT_RESULTS else "pending" if r.final_result in PENDING_RESULTS else "normal"
+        c[group] += 1
+    out = []
+    for label, c in days.items():
+        done = c["normal"] + c["defect"]
+        out.append(DayPoint(label=label, total=sum(c.values()), normal=c["normal"], defect=c["defect"], pending=c["pending"],
+                            yield_pct=round(c["normal"] / done * 100, 2) if done else 0.0))
+    return out
+
+
 @router.get("/report", response_model=ReportOut)
 def report(
-    d: date | None = Query(None, alias="date"),
+    period: str = Query("day", pattern="^(day|week|month)$"),   # day 일일 / week 주간(월~일) / month 월간(1일~말일)
+    d: date | None = Query(None, alias="date"),                  # 기준일: 이 날짜가 속한 주·달이 보고서 기간
     db: Session = Depends(get_db),
     _user: AdminUser = Depends(get_current_user),
 ):
     d = d or date.today()
-    start, end = date_range(d, d)
-    rows = _rows(db, start, end)
+    start, end, p_start, p_end, title = _bounds(period, d)
+    rows = _report_rows(db, *date_range(start, end))
+    label = {"day": "일간", "week": "주간", "month": "월간"}[period]
     return ReportOut(
-        date=d.isoformat(),
-        daily=_period(db, "일간", d, d),
-        weekly=_period(db, "주간 (7일)", d - timedelta(days=6), d),
-        monthly=_period(db, "월간 (30일)", d - timedelta(days=29), d),
-        defects=_defect_analysis(db, rows),
-        ai_reports=_ai_items(rows),
+        period=period, date=d.isoformat(), date_from=start.isoformat(), date_to=end.isoformat(), title=title,
+        current=_period(db, label, start, end), previous=_period(db, f"이전 {label}", p_start, p_end),
+        days=_day_points(rows, start, end) if period != "day" else [],
+        defects=_defect_analysis(db, rows), ai_reports=_ai_items(rows, limit=10),
     )

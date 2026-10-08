@@ -17,7 +17,7 @@ export default function Layout() {
         {/* NavLink 는 현재 주소와 같으면 자동으로 class="active" 가 붙는다 (end: 정확히 같을 때만) */}
         <nav>
           <NavLink to="/" end>대시보드</NavLink>
-          <NavLink to="/report">일일 보고서</NavLink>
+          <NavLink to="/report">보고서</NavLink>
           <NavLink to="/inspections">검사 조회</NavLink>
           <NavLink to="/defect-types">불량 종류</NavLink>
           <NavLink to="/alarms">안전 알람</NavLink>

@@ -146,7 +146,7 @@ export default function Dashboard() {
           <section className="card">
             <div className="page-head" style={{ marginBottom: 6 }}>
               <h3 style={{ margin: 0 }}>AI 조치 요약</h3>
-              <Link to="/report" className="small">일일 보고서 보기 →</Link>
+              <Link to="/report" className="small">보고서 보기 →</Link>
             </div>
             {summary.daily_ai_reports?.length ? (
               summary.daily_ai_reports.map((a) => (

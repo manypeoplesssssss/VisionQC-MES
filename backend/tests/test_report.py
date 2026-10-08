@@ -5,6 +5,8 @@
 """
 import time
 
+from datetime import date, timedelta
+
 from app.services import ai_report
 from tests.helpers import SCRATCH, TODAY, WHITE_PAINT
 
@@ -17,22 +19,45 @@ def _defect_inspection(mes, iid, defects=(SCRATCH,)):
     mes.complete(iid)
 
 
-def test_report_numbers_and_empty_day(client, mes, viewer):
-    """일간·주간·월간 집계: 정상/불량/판정 전과 수율(판정 끝난 검사 기준)"""
+def test_report_day_numbers_and_empty_day(client, mes, viewer):
+    """일일: 정상/불량/판정 전과 수율(판정 끝난 검사 기준), 앞 기간 비교, 데이터 없는 날은 0"""
     mes.start("N1"); mes.dimension("N1"); mes.patchcore("N1", 0.1)      # 정상
     mes.start("N2"); mes.dimension("N2"); mes.patchcore("N2", 0.1)      # 정상
     _defect_inspection(mes, "D1")                                       # 공정 불량
     mes.start("X1")                                                     # 판정 전
     r = client.get("/api/dashboard/report", headers=viewer, params={"date": TODAY}).json()
-    day = r["daily"]
+    day = r["current"]
+    assert r["period"] == "day" and r["date_from"] == r["date_to"] == TODAY and r["days"] == []
     assert (day["total"], day["normal"], day["defect"], day["pending"]) == (4, 2, 1, 1)
     assert day["yield_pct"] == round(2 / 3 * 100, 2) and day["defect_rate"] == round(1 / 3 * 100, 2)
-    assert r["weekly"]["total"] == r["monthly"]["total"] == 4          # 오늘 검사는 7일·30일 안에 포함
-    assert r["weekly"]["label"].startswith("주간") and r["monthly"]["label"].startswith("월간")
+    assert r["previous"]["total"] == 0 and r["previous"]["label"].startswith("이전")      # 어제는 검사 없음
     # 데이터가 없는 날은 전부 0, 수율 0 (가짜 숫자가 나오지 않는다)
     empty = client.get("/api/dashboard/report", headers=viewer, params={"date": "2000-01-01"}).json()
-    assert (empty["daily"]["total"], empty["monthly"]["total"], empty["daily"]["yield_pct"]) == (0, 0, 0.0)
+    assert (empty["current"]["total"], empty["current"]["yield_pct"]) == (0, 0.0)
     assert empty["defects"] == [] and empty["ai_reports"] == []
+
+
+def test_report_week_and_month_ranges(client, mes, viewer):
+    """주간은 기준일이 속한 월~일, 월간은 그 달 1일~말일. 하루씩 추이는 오늘까지만"""
+    mes.start("W1"); mes.dimension("W1"); mes.patchcore("W1", 0.1)
+    _defect_inspection(mes, "W2")
+    today = date.today()
+    week = client.get("/api/dashboard/report", headers=viewer, params={"period": "week", "date": TODAY}).json()
+    monday = today - timedelta(days=today.weekday())
+    assert (week["date_from"], week["date_to"]) == (monday.isoformat(), (monday + timedelta(days=6)).isoformat())
+    assert [x["label"] for x in week["days"]] == [(monday + timedelta(days=i)).isoformat() for i in range(today.weekday() + 1)]
+    assert week["days"][-1]["total"] == 2 and week["days"][-1]["normal"] == 1 and week["days"][-1]["defect"] == 1
+    assert week["current"]["total"] == 2 and week["title"].endswith("주간")
+    month = client.get("/api/dashboard/report", headers=viewer, params={"period": "month", "date": TODAY}).json()
+    first = today.replace(day=1)
+    assert month["date_from"] == first.isoformat() and month["date_to"][:7] == TODAY[:7]
+    assert len(month["days"]) == today.day and month["days"][0]["label"] == first.isoformat()
+    assert month["current"]["total"] == 2 and month["title"] == f"{TODAY[:7]} 월간"
+    # 지난달 기준일 → 그 달 전체가 보이고, 앞 기간은 그 전달
+    old = client.get("/api/dashboard/report", headers=viewer, params={"period": "month", "date": "2026-02-15"}).json()
+    assert (old["date_from"], old["date_to"]) == ("2026-02-01", "2026-02-28") and len(old["days"]) == 28
+    assert (old["previous"]["date_from"], old["previous"]["date_to"]) == ("2026-01-01", "2026-01-31")
+    assert client.get("/api/dashboard/report", headers=viewer, params={"period": "year"}).status_code == 422
 
 
 def test_report_defect_analysis_uses_defect_type_table(client, mes, admin, viewer):

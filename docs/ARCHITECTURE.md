@@ -363,9 +363,11 @@ curl -X PUT http://localhost:8000/api/inspections/20261006_test_001/dimension -H
   "recent_defects": [ 검사 목록 한 줄, ... ]
 }
 ```
-**GET /api/dashboard/report?date=2026-10-08** — 일일 보고서 (화면 [일일 보고서])
-`{ date, daily, weekly, monthly: { label, date_from, date_to, total, normal, defect, pending, yield_pct, defect_rate }, defects: [{ defect_code, defect_name, count, inspections, classes, cause_candidates, recommended_action }], ai_reports: [{ inspection_id, product_name, defect_codes, text, created_at }] }`
-주간은 기준일 포함 7일, 월간은 30일. 수율 = 정상 ÷ (정상 + 불량), 판정 전 검사는 뺀다. 불량 분석의 원인·조치는 불량 종류 표의 내용이고, 코드를 지정하지 않은 결함은 `미분류`.
+**GET /api/dashboard/report?period=day|week|month&date=2026-10-08** — 보고서 (화면 [보고서] 의 일일·주간·월간 탭)
+기간: `day` 기준일 하루 / `week` 기준일이 속한 주(월~일) / `month` 기준일이 속한 달(1일~말일). `period` 를 안 주면 `day`.
+`{ period, date, date_from, date_to, title, current, previous: { label, date_from, date_to, total, normal, defect, pending, yield_pct, defect_rate }, days: [{ label, total, normal, defect, pending, yield_pct }], defects: [{ defect_code, defect_name, count, inspections, classes, cause_candidates, recommended_action }], ai_reports: [{ inspection_id, product_name, defect_codes, text, created_at }] }`
+- `previous` 는 바로 앞 같은 길이 기간(어제, 지난주, 지난달)이라 비교에 쓴다. `days` 는 주간·월간에서 하루씩 (오늘 이후 날짜는 뺌, 일일은 빈 배열)
+- 수율 = 정상 ÷ (정상 + 불량), 판정 전 검사는 뺀다. 불량 분석의 원인·조치는 불량 종류 표의 내용이고, 코드를 지정하지 않은 결함은 `미분류`. `ai_reports` 는 그 기간의 최근 10건
 
 **GET /api/dashboard/hourly?date=** → `[{ "label": "00", "total": 0, "defect": 0 }, ... 24개]`
 

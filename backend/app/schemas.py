@@ -360,13 +360,29 @@ class DefectAnalysis(BaseModel):
     recommended_action: str | None = None
 
 
+class DayPoint(BaseModel):
+    """주간·월간 보고서의 하루치 막대 1개"""
+    label: str                       # 2026-10-08
+    total: int
+    normal: int
+    defect: int
+    pending: int
+    yield_pct: float
+
+
 class ReportOut(BaseModel):
-    date: str
-    daily: PeriodStat
-    weekly: PeriodStat
-    monthly: PeriodStat
-    defects: list[DefectAnalysis] = []
-    ai_reports: list[AiReportItem] = []
+    """보고서 (일일 / 주간 / 월간 공통). period 에 따라 기간이 정해진다
+    day: 기준일 하루 / week: 기준일이 속한 주(월~일) / month: 기준일이 속한 달(1일~말일)"""
+    period: str                      # day | week | month
+    date: str                        # 기준일
+    date_from: str                   # 보고서 기간 시작
+    date_to: str                     # 보고서 기간 끝
+    title: str                       # 화면 제목용 문구
+    current: PeriodStat              # 이 기간의 집계
+    previous: PeriodStat             # 바로 앞 같은 길이 기간의 집계 (비교용)
+    days: list[DayPoint] = []        # 주간·월간: 하루씩 (오늘 이후 날짜는 뺌)
+    defects: list[DefectAnalysis] = []   # 이 기간에 검출된 결함의 코드별 분석
+    ai_reports: list[AiReportItem] = []  # 이 기간의 AI 조치 요약 (최근 10건)
 
 
 InspectionDetailOut.model_rebuild()

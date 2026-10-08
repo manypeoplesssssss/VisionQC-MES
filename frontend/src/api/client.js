@@ -125,7 +125,7 @@ export const api = {
   summary: (date) => request("/api/dashboard/summary", { params: { date } }),
   hourly: (date) => request("/api/dashboard/hourly", { params: { date } }),
   daily: (date_from, date_to) => request("/api/dashboard/daily", { params: { date_from, date_to } }),
-  report: (date) => request("/api/dashboard/report", { params: { date } }),
+  report: (date, period = "day") => request("/api/dashboard/report", { params: { date, period } }),
 
   // 검사 조회 · 불량 코드 · 삭제 · CSV
   inspections: (params) => request("/api/inspections", { params }),
