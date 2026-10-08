@@ -153,6 +153,13 @@ class SimTurntable:
     def check_placement(self):
         return (True, "OK") if self.placement_ok else (False, "OFFSET_X")
 
+    fw_beam = None
+    aligning = False
+
+    def set_alignment(self, on):
+        self.aligning = bool(on)
+        self.fw_beam = (95, 96) if on else None
+
     def calibrate_placement(self):
         return True
 
@@ -445,6 +452,8 @@ class Engine(threading.Thread):
         self.table = self.camera = None
         if table is not None:
             try:
+                if getattr(table, "aligning", False):
+                    table.set_alignment(False)  # 정렬용 레이저를 켜 둔 채 끝내지 않는다
                 table.stop()
             except Exception as exc:
                 self._log(f"정지 응답 확인 실패: {exc}. 턴테이블 상태를 확인하세요.")
@@ -583,6 +592,8 @@ class Engine(threading.Thread):
         """[3D 검사]: 안전 확인 → 장비 연결을 3D 에 넘김 → 스캔·병합·측정·DB 저장 → 장비 다시 연결.
         반환: 새 (camera, table, last_frame)"""
         sensors = self._has_sensors(table)
+        if sensors and getattr(table, "aligning", False):
+            table.set_alignment(False)  # 3D 스캔이 보드를 넘겨받기 전에 정렬용 레이저를 끈다
         if sensors:  # 센서 장비: 인터락은 실제 값. 센터링(놓임)은 물체를 올린 뒤 3D 스캔 안에서 검사하므로 여기서는 보지 않는다
             interlock, centering = table.interlock_state(), "OFF"
         else:
@@ -793,7 +804,8 @@ class Engine(threading.Thread):
         if time.monotonic() - self.sensor_sent >= 0.5:
             self.sensor_sent = time.monotonic()
             self._state(sensor_mode=True, interlock=interlock, centering=self.placement_state,
-                        sensor_cm=list(getattr(table, "fw_cm", [])))
+                        sensor_cm=list(getattr(table, "fw_cm", [])), align=bool(getattr(table, "aligning", False)),
+                        beam=getattr(table, "fw_beam", None))
         return self.placement_state, interlock
 
     def _check_placement(self, table):
@@ -1008,6 +1020,18 @@ class Engine(threading.Thread):
                 if not running:
                     camera, table, last_frame = self._scan_3d(camera, table, last_frame)
                 continue
+            if command == "align":  # [레이저 켜기/끄기]: 빔 정렬 모드 (대기 중에만)
+                if not self._has_sensors(table) or running:
+                    self._log("레이저 켜기는 센서가 있는 장비에서 대기 중일 때만 됩니다")
+                else:
+                    try:
+                        table.set_alignment(not getattr(table, "aligning", False))
+                        self._log("레이저 켬: 광센서가 받는 빛이 90% 이상이면 빔이 맞은 것입니다 (정렬이 끝나면 [레이저 끄기])"
+                                  if table.aligning else "레이저 끔")
+                    except Exception as exc:
+                        self._log(f"레이저 켜기 실패: {exc}")
+                self.sensor_sent = 0.0
+                continue
             if command in ("reset", "calibrate", "placement"):  # 센서 장비의 대기 중 조작 (검사 중에는 인터락 정지 화면에서만 리셋)
                 if not self._has_sensors(table) or running:
                     self._log("이 조작은 센서가 있는 장비(3D 펌웨어 기반)에서 대기 중일 때만 됩니다")
@@ -1058,6 +1082,8 @@ class Engine(threading.Thread):
                     continue
                 # 장비 안전 사전 확인: 센터링 OFF + 인터락 0 이 아니면 시작하지 않고 DB 에 알람 기록
                 if self._has_sensors(table):
+                    if getattr(table, "aligning", False):
+                        table.set_alignment(False)  # 정렬용 레이저는 검사 전에 끈다
                     self._check_placement(table)  # 센서 장비: 시작할 때마다 물체 놓임을 레이저로 확인
                 centering, interlock = self._safety_now(table)
                 if not safety_ok(centering, interlock):
@@ -1324,6 +1350,9 @@ class App:
         self.btn_chk = ttk.Button(row, text="놓임 검사", command=lambda: self.engine.send("placement"))
         self.btn_cal.pack(side="left", expand=True, fill="x")
         self.btn_chk.pack(side="left", expand=True, fill="x", padx=(4, 0))
+        self.btn_align = ttk.Button(safe, text="레이저 켜기 (빔 정렬)", command=lambda: self.engine.send("align"))
+        self.btn_align.pack(fill="x", pady=(2, 0))
+        self.cm_text = self.beam_text = ""
         self.confirm_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(safe, text="구역에 사람이 없고 물체가 움직이지 않았음을 확인했음",
                         variable=self.confirm_var).pack(anchor="w", pady=(4, 0))
@@ -1410,6 +1439,7 @@ class App:
                    self.btn_stop: not locked, self.btn_roi: not locked and not busy,
                    self.btn_cam: not locked and not busy,
                    self.btn_cal: self.sensor_mode and not busy, self.btn_chk: self.sensor_mode and not busy,
+                   self.btn_align: self.sensor_mode and not busy,
                    self.btn_reset: self.sensor_mode and (self.hold in ("reset", "reset3d")
                                                          or (self.hold == "" and not busy and self.sensor_interlock != "0")),
                    self.btn_resume: self.hold == "resume"}
@@ -1444,7 +1474,12 @@ class App:
                         var = self.safety_vars[k][0]
                         var.set(self.safety_names[k].get(v, "미확인"))
                     elif k == "sensor_cm":
-                        self.sensor_text.set("초음파 " + " / ".join("끊김" if c < 0 else f"{c}cm" for c in v) if v else "")
+                        self.cm_text = "초음파 " + " / ".join("끊김" if c < 0 else f"{c}cm" for c in v) if v else ""
+                    elif k == "beam":
+                        self.beam_text = f"빔 받는 빛 A {v[0]}% / B {v[1]}%" if v else ""
+                        self.sensor_text.set(self.cm_text + ("\n" + self.beam_text if self.beam_text else ""))
+                    elif k == "align":
+                        self.btn_align.config(text="레이저 끄기" if v else "레이저 켜기 (빔 정렬)")
                     else:
                         self.vars[k].set(f"{v:.1f}°" if k == "angle" else str(v))
             elif kind == "pending":

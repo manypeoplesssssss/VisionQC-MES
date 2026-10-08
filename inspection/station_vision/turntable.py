@@ -72,6 +72,8 @@ class Turntable:
         self.fw_state = None         # RUN / TRIPPED / FAULT
         self.fw_cm = []              # 초음파 거리(cm), 응답 없으면 -1
         self.fw_seen = 0.0           # 마지막 상태 줄을 받은 시각 (time.monotonic)
+        self.fw_beam = None          # 빔 정렬 모드에서 광센서가 받는 빛 (%) (a, b). 정렬 모드가 아니면 None
+        self.aligning = False        # 레이저를 계속 켜 두는 빔 정렬 모드인가
         self._wait_ready()
         self._detect_sensors()
 
@@ -103,6 +105,12 @@ class Turntable:
 
     def _note_status(self, line):
         """상태 줄(STAT,/EVT,)에서 인터락 센서 상태를 갱신한다. 응답으로는 쓰지 않는다"""
+        if line.startswith("BEAM,"):
+            try:
+                self.fw_beam = tuple(int(v) for v in line.split(",")[1:3])
+            except ValueError:
+                pass
+            return
         if line.startswith(("STAT,", "EVT,")):
             parts = line.split(",")
             if len(parts) >= 2 and parts[1] in ("RUN", "TRIPPED", "FAULT"):
@@ -277,6 +285,15 @@ class Turntable:
         if reply.startswith("PLACE,ERR,"):
             return False, reply.split(",", 2)[2]
         raise RuntimeError(f"놓임 검사 응답 이상: {reply!r} (ERR,BUSY 면 모터가 움직이는 중, ERR 면 놓임 검사가 없는 펌웨어)")
+
+    def set_alignment(self, on):
+        """레이저 빔 정렬 모드 (L1/L0): 켜면 두 레이저가 계속 켜져 있고 광센서가 받는 빛(%)이 0.3초마다 BEAM 줄로 온다.
+        레이저·광센서 위치를 맞출 때 쓴다. 둘 다 90% 이상이면 보드 LED 가 켜진다. 펌웨어는 응답 줄이 없다(HINT 만)"""
+        self.ser.reset_input_buffer()
+        self.ser.write(b"L1\n" if on else b"L0\n")
+        self.aligning = bool(on)
+        if not on:
+            self.fw_beam = None
 
     def close(self):
         """시리얼 포트 닫기 (다른 프로그램이나 아두이노 IDE 가 포트를 쓸 수 있게 된다)"""
