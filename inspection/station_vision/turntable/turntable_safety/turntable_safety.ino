@@ -1,7 +1,10 @@
 // [비전 검사 프로그램용 복사본] station_3d/scanner_v2_6/turntable/turntable.ino (v2.6) 에
-// 'U' 명령(프로그램에서 인터락 리셋) 한 가지만 더한 것. 3D 팀 원본은 수정하지 않았고, 나머지는 같다.
-//   U : 인터락 리셋 요청. 물리 리셋 버튼과 같은 조건 (구역이 1초 이상 비어 있어야 함) 으로 판정한다
+// 명령 3개(U, S, X)만 더한 것. 3D 팀 원본은 수정하지 않았고, 나머지는 같다.
+//   U : 프로그램에서 인터락 리셋 요청. 물리 리셋 버튼과 같은 조건 (구역이 1초 이상 비어 있어야 함) 으로 판정한다
 //       -> RESET,OK (RUN 복귀) / RESET,ERR,NOT_CLEAR (아직 구역에 있음) / RESET,ERR,FAULT (센서 고장)
+//   S : 저속 연속 회전 시작/재개 (YOLO 용, 비전용 펌웨어와 같은 속도) -> STARTED
+//       인터락이 걸리면 다른 이동과 똑같이 즉시 멈춘다 (ERR,INTERLOCK,<각도> 한 줄을 알림). 걸린 동안 S 는 ERR,INTERLOCK
+//   X : 즉시 정지 + 안정화 후 DONE (연속 회전·이동 중에도 됨. 인터락으로 이미 멈춰 있으면 바로 DONE)
 // 원본 설명:
 // turntable.ino — 28BYJ-48 턴테이블 + 초음파 인터락 + 레이저 놓임 검사 (Arduino Uno R3, 보드 1개)
 // (2026-10-06 v2.6: sketch_oct6a 인터락 병합본 + sketch_oct6b 놓임 검사 병합.
@@ -50,7 +53,8 @@ const unsigned long SETTLE_MS = 400;        // 도착 후 잔진동 대기
 // HALF4WIRE는 (IN1, IN3, IN2, IN4) 순서. 마지막 false: 전역 생성 시 pinMode 호출 방지
 AccelStepper stepper(AccelStepper::HALF4WIRE, 2, 6, 3, 7, false);
 
-enum MoveState : uint8_t { MV_IDLE, MV_RUNNING, MV_SETTLING };
+enum MoveState : uint8_t { MV_IDLE, MV_RUNNING, MV_SETTLING, MV_SPINNING };
+const float SPIN_SPEED = 100.0;             // 연속 회전 속도 (스텝/초, 약 1.47rpm. 비전용 펌웨어와 같음)
 MoveState moveState = MV_IDLE;
 unsigned long settleEnd = 0;
 float targetDeg = 0.0;
@@ -356,8 +360,26 @@ void abortMotion() {
   Serial.println(currentDeg(), 2);
 }
 
+void startSpin() {
+  stepper.enableOutputs();
+  stepper.setSpeed(SPIN_SPEED);
+  moveState = MV_SPINNING;
+}
+
+void stopMotion() {                                        // X: 이동·연속 회전을 즉시 멈추고 안정화 뒤 DONE
+  if (moveState == MV_SETTLING) return;                    // 이미 안정화 중 (DONE 은 곧 옴)
+  stepper.setCurrentPosition(stepper.currentPosition());   // 남은 이동 목표를 지워 즉시 정지
+  targetDeg = currentDeg();
+  stepper.enableOutputs();                                 // 코일을 켠 채 잔진동 대기
+  moveState = MV_SETTLING;
+  settleEnd = millis() + SETTLE_MS;
+}
+
 void updateMotion() {
-  if (moveState == MV_RUNNING) {
+  if (moveState == MV_SPINNING) {
+    stepper.runSpeed();
+    targetDeg = currentDeg();
+  } else if (moveState == MV_RUNNING) {
     stepper.run();
     if (stepper.distanceToGo() == 0) {
       moveState = MV_SETTLING;
@@ -375,6 +397,8 @@ void updateMotion() {
 bool motionBusy() { return moveState != MV_IDLE; }
 void motorCoilsOff() { stepper.disableOutputs(); }
 #else
+void startSpin() {}
+void stopMotion() {}
 void abortMotion() {}
 void updateMotion() {}
 bool motionBusy() { return false; }
@@ -535,6 +559,24 @@ void execCommand(char* s) {
     if (state != ST_RUN)       { Serial.println(F("ERR,INTERLOCK")); return; }
     if (motionBusy() || plBusy()) { Serial.println(F("ERR,BUSY"));   return; }   // 검사 중엔 모터를 돌리지 않음
     startMove(cmd == 'R' ? targetDeg + value : value);
+#else
+    Serial.println(F("ERR"));
+#endif
+  } else if (cmd == 'S') {
+#if ENABLE_TURNTABLE
+    if (state != ST_RUN)       { Serial.println(F("ERR,INTERLOCK")); return; }
+    if (motionBusy() || plBusy()) { Serial.println(F("ERR,BUSY"));   return; }
+    startSpin();
+    Serial.println(F("STARTED"));
+#else
+    Serial.println(F("ERR"));
+#endif
+  } else if (cmd == 'X') {
+#if ENABLE_TURNTABLE
+    if (state != ST_RUN) { Serial.println(F("DONE")); return; }   // 인터락으로 이미 멈춰 있음 (안정화 대기 불필요)
+    if (moveState == MV_SETTLING) return;                         // 이미 멈추는 중: DONE 은 곧 한 번 옴
+    if (moveState == MV_IDLE) { Serial.println(F("DONE")); return; }
+    stopMotion();
 #else
     Serial.println(F("ERR"));
 #endif

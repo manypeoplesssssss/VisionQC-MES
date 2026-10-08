@@ -122,9 +122,9 @@ class SimTurntable:
     def __init__(self, sensors=False):
         self.position_deg = 0.0
         self._started = None
-        # 센서 시뮬레이션 (--sim-sensors): 3D 펌웨어처럼 한 칸씩 돌고 인터락·놓임 검사를 흉내 낸다
+        # 센서 시뮬레이션 (--sim-sensors): 인터락·놓임 검사를 흉내 낸다
         self.has_sensors = sensors
-        self.continuous = not sensors
+        self.continuous = True   # 센서용 펌웨어(turntable_safety)도 연속 회전(S/X)을 지원한다
         self.fw_cm = [80, 80]
         self.zone_occupied = False   # 시험용: 사람이 보호구역에 있음
         self.tripped = False         # 인터락 걸림 (구역에 들어오면 켜지고, 비워도 리셋해야 풀림)
@@ -1167,15 +1167,23 @@ class Engine(threading.Thread):
 
             # ---- 회전 각도 확인 + 검사 중 장비 안전 확인 (0.5초마다)
             if time.monotonic() - last_poll >= 0.5:
-                centering, interlock = self.safety()
+                centering, interlock = self._safety_now(table)
                 if not safety_ok(centering, interlock):
-                    # 이상 감지 → 장비 정지 → 검사 보류 → 알람 저장. 상태가 돌아와도 자동으로 다시 돌지 않음
-                    table.stop()
-                    running = False
-                    self._log(f"안전 이상으로 정지·보류: 센터링 {CENTERING_KO.get(centering, centering)} / "
-                              f"인터락 {INTERLOCK_KO.get(interlock, interlock)} (자동 재시작 안 함)")
-                    self._state(status="보류(안전)", angle=table.position_deg)
-                    self._submit_safety("YOLO", centering, interlock, self.job["inspection_id"], "검사 중 이상 감지")
+                    # 이상 감지 → 장비 정지 → 알람 저장. 센서 장비의 인터락이면 리셋 뒤 [이어서 진행]으로 멈춘 자리부터 다시 연속 회전.
+                    # 그 밖에는 검사 보류 (자동으로 다시 돌지 않음)
+                    try:
+                        table.stop()
+                    except InterlockStop:
+                        pass  # 보드가 이미 멈춰 있음
+                    res = self._on_unsafe("YOLO", table, centering, interlock, "검사 중 이상 감지", "YOLO 검사 중")
+                    if res == "quit":
+                        return
+                    if res == "resume":
+                        table.start()
+                        last_poll = 0.0
+                        last_frame = time.monotonic()
+                    else:
+                        running = False
                     continue
                 angle = table.reported_angle()
                 last_poll = time.monotonic()

@@ -106,7 +106,7 @@ cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_visio
 
 보드에는 펌웨어를 **하나만** 올릴 수 있습니다.
 - **비전용** (`station_vision\turntable\turntable.ino`) — **지금 올라가 있음.** YOLO 가 연속 회전으로 돈다. 인터락(초음파)·놓임 검사 기능은 없다
-- **센서용** (`station_vision\turntable\turntable_safety\turntable_safety.ino`) — 3D용 펌웨어 복사본 + 프로그램에서 인터락을 리셋하는 `U` 명령. 3D 팀 원본은 그대로. **아직 올리지 않았음** (아래 \"센서 인터락\" 참고)
+- **센서용** (`station_vision\turntable\turntable_safety\turntable_safety.ino`) — 3D용 펌웨어 복사본 + 프로그램에서 인터락을 리셋하는 `U` 명령 + 연속 회전 `S`/`X` (YOLO 가 연속 회전으로 돈다). 3D 팀 원본은 그대로. **지금 올라가 있음** (아래 \"센서 인터락\" 참고)
 - **3D용** (`station_3d\scanner_v2_6\turntable\turntable.ino`) — 인터락·놓임 검사 포함. 연속 회전(S/X)이 없어서 검사 프로그램이 YOLO 를 `YOLO_STEP_DEG`(기본 5도)씩 멈춰 가며 검사한다. 오류 없이 동작하도록 해 둠
 
 어느 쪽이 올라가 있어도 검사 프로그램이 알아서 맞춰 동작합니다 (3D 쪽이면 기록란에 "3D 펌웨어" 안내가 뜸). 펌웨어를 바꿔 올릴 때는 시리얼 모니터와 검사 프로그램을 먼저 닫아야 합니다.
