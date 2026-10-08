@@ -76,7 +76,7 @@ cd C:\Users\짱가\Desktop\VisionQC_AI_MES\VisionQC-MES\inspection\station_visio
 5. 치수가 **합격** 이면 **[② 검사 시작 (PatchCore → YOLO)]** 이 켜진다. 불합격이면 켜지지 않는다 (다시 ① 부터)
 6. **아이폰(YOLO) 카메라를 켜고** **[YOLO 카메라 연결]** (또는 ② 를 누르면 그때 연결). 3D 가 끝나기 전에 켜 둘 필요는 없다
 7. **[② 검사 시작]** → PatchCore 가 `PATCHCORE_VIEWS` 장(기본 12장 = 30도씩)을 멈춰 가며 찍고, 가장 높은 이상 점수로 판정한다
-   - 판정 기준은 `config.py` 의 `PATCHCORE_THRESHOLD` (지금 0.7, 점수가 기준 이상이면 불합격. 지우면 모델 기본값 0.5)
+   - 판정 기준은 `config.py` 의 `PATCHCORE_THRESHOLD` (지금 0.75, 점수가 기준 이상이면 불합격. 지우면 모델 기본값 0.5)
    - 합격이면 여기서 끝 (최종 정상)
    - 불합격이면 이어서 YOLO 가 한 바퀴 돌며 결함 종류·위치를 찍는다
    - **[PatchCore 먼저]** 체크를 끄면 YOLO 만 한다
