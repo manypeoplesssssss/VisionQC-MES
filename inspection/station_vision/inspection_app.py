@@ -72,6 +72,7 @@ PYTHON_3D = str(getattr(config, "PYTHON_3D", None) or sys.executable)  # 3D 스�
 # PatchCore (1단계): 턴테이블을 360/VIEWS 도씩 멈추며 찍고, 가장 높은 이상 점수로 합격/불합격
 PATCHCORE_VIEWS = int(getattr(config, "PATCHCORE_VIEWS", 12))          # 12 → 30도씩 12장
 PATCHCORE_MODEL = getattr(config, "PATCHCORE_MODEL", None)            # 없으면 visionPatchCore 의 models/v3
+PATCHCORE_THRESHOLD = getattr(config, "PATCHCORE_THRESHOLD", None)    # 판정 기준 (점수 >= 기준이면 불합격). 없으면 모델 기본값 0.5
 # 연속 회전(S/X)이 없는 펌웨어(3D 용 v2.6)일 때 YOLO 를 몇 도씩 멈춰 가며 검사할지
 YOLO_STEP_DEG = float(getattr(config, "YOLO_STEP_DEG", 5.0))
 # 이 상태일 때는 검사 시작 버튼을 잠근다 ("PatchCore 3/72" 같은 진행 표시도 포함)
@@ -589,7 +590,7 @@ class Engine(threading.Thread):
         self._log("PatchCore 모델 불러오는 중... (CPU, 처음에는 시간이 걸림)")
         try:
             from patchcore_infer import PatchCoreInspector
-            self.patchcore = PatchCoreInspector(PATCHCORE_MODEL, device="cpu")
+            self.patchcore = PatchCoreInspector(PATCHCORE_MODEL, device="cpu", threshold=PATCHCORE_THRESHOLD)
             self._log(f"PatchCore 준비 완료: {self.patchcore.model_path.parent.name} "
                       f"(판정 기준 {self.patchcore.threshold:.3f})")
         except Exception as exc:

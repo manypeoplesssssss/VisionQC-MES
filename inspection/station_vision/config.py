@@ -44,5 +44,6 @@ YOLO_IMGSZ = 608           # YOLO 입력 크기: ROI 를 letterbox 로 608 에 �
 
 # ---- PatchCore (1단계 검사, inspection_app.py)
 PATCHCORE_VIEWS = 12       # 한 바퀴에 멈춰서 찍는 장수 (12 → 30도씩. 72 → 5도씩. 8 → 45도씩)
+PATCHCORE_THRESHOLD = 0.7  # 판정 기준 (정규화 점수 0~1, 점수 >= 기준이면 불합격). 모델 기본값은 0.5
 # PatchCore 모델 파일. 비워 두면 inspection/visionPatchCore/patchcore_export/models/v3/model.ckpt
 # PATCHCORE_MODEL = r"C:\...\models\v4\model.ckpt"
