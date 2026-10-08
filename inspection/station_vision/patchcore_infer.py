@@ -26,7 +26,7 @@ DEFAULT_MODEL = ROOT.parent / "visionPatchCore" / "patchcore_export" / "models" 
 
 
 class PatchCoreInspector:
-    def __init__(self, model_path: str | Path | None = None, device: str = "cpu"):
+    def __init__(self, model_path: str | Path | None = None, device: str = "cpu", threshold: float | None = None):
         import torch
         from anomalib.models import Patchcore
 
@@ -47,8 +47,10 @@ class PatchCoreInspector:
         self.last_input_shape = None
         self.last_feature_input_shape = None
         self.model.model.register_forward_pre_hook(self._check_feature_input)
-        # 정규화된 점수의 판정 기준. anomalib 후처리는 학습 때 구한 기준을 0.5 로 맞춘다
-        self.threshold = float(getattr(getattr(self.model, "post_processor", None), "normalized_image_threshold", 0.5))
+        # 정규화된 점수의 판정 기준. 모델 기본값은 학습 때 구한 기준을 0.5 로 맞춘 것이고,
+        # config.PATCHCORE_THRESHOLD 를 주면 그 값을 쓴다 (점수 >= 기준이면 불합격)
+        self.model_threshold = float(getattr(getattr(self.model, "post_processor", None), "normalized_image_threshold", 0.5))
+        self.threshold = self.model_threshold if threshold is None else float(threshold)
 
     def _image_size(self):
         try:
